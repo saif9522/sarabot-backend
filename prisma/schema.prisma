@@ -1,0 +1,254 @@
+// SQLite, no Json/enum/list columns: works on any Prisma 5 or 6 version.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+/// A customer business. Everything (numbers, bots, products, chats) belongs to one.
+model Workspace {
+  id            String         @id @default(cuid())
+  name          String
+  /// "active" | "suspended"
+  status        String         @default("active")
+  /// Round-robin new chats to agents
+  autoAssign    Boolean        @default(false)
+  notes         String         @default("")
+  createdAt     DateTime       @default(now())
+  users         User[]
+  subscriptions Subscription[]
+  accounts      Account[]
+  bots          Bot[]
+  categories    ProductCategory[]
+  products      Product[]
+}
+
+model User {
+  id            String     @id @default(cuid())
+  email         String     @unique
+  name          String
+  mobile        String     @default("")
+  passwordHash  String
+  /// "superadmin" | "owner" | "admin" | "agent"
+  role          String
+  workspaceId   String?
+  workspace     Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  active        Boolean    @default(true)
+  /// Agents only: may see and pick up chats nobody is assigned to
+  seeUnassigned Boolean    @default(true)
+  lastAssignedAt DateTime?
+  lastLoginAt   DateTime?
+  /// Bumped on password change/reset: signs out every existing session
+  sessionVersion Int       @default(0)
+  resets        PasswordReset[]
+  createdAt     DateTime   @default(now())
+  assigned      Contact[]
+}
+
+/// A plan the Super Admin offers. Subscriptions copy its limits when activated.
+model Plan {
+  id           String         @id @default(cuid())
+  name         String
+  description  String         @default("")
+  /// Automatic bot replies included; null = unlimited
+  chatLimit    Int?
+  durationDays Int
+  price        Float          @default(0)
+  currency     String         @default("INR")
+  numbersLimit Int            @default(1)
+  agentsLimit  Int            @default(1)
+  active       Boolean        @default(true)
+  /// Given automatically to new sign-ups (only one plan can be the trial)
+  trialForSignup Boolean      @default(false)
+  sortOrder    Int            @default(0)
+  createdAt    DateTime       @default(now())
+  subscriptions Subscription[]
+}
+
+model Subscription {
+  id           String    @id @default(cuid())
+  workspaceId  String
+  workspace    Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  planId       String?
+  plan         Plan?     @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planName     String
+  chatLimit    Int?
+  chatsUsed    Int       @default(0)
+  numbersLimit Int
+  agentsLimit  Int
+  startsAt     DateTime
+  endsAt       DateTime
+  /// "active" | "cancelled"  (expiry is computed from endsAt)
+  status       String    @default("active")
+  amountPaid   Float     @default(0)
+  currency     String    @default("INR")
+  note         String    @default("")
+  activatedBy  String    @default("")
+  createdAt    DateTime  @default(now())
+
+  @@index([workspaceId, startsAt])
+}
+
+/// A WhatsApp number linked by QR code
+model Account {
+  workspaceId   String?
+  workspace     Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  id            String    @id @default(cuid())
+  label         String
+  phone         String?
+  botEnabled    Boolean   @default(true)
+  workingBotId  String?
+  workingBot    Bot?      @relation("WorkingBot", fields: [workingBotId], references: [id], onDelete: SetNull)
+  offHoursBotId String?
+  offHoursBot   Bot?      @relation("OffHoursBot", fields: [offHoursBotId], references: [id], onDelete: SetNull)
+  /// Comma-separated weekdays, 0 = Sunday … 6 = Saturday
+  workDays      String    @default("1,2,3,4,5,6")
+  workStart     String    @default("09:00")
+  workEnd       String    @default("18:00")
+  timezone      String    @default("Asia/Kolkata")
+  createdAt     DateTime  @default(now())
+  contacts      Contact[]
+}
+
+model Bot {
+  id              String    @id @default(cuid())
+  workspaceId     String?
+  workspace       Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name            String
+  aiEnabled       Boolean   @default(true)
+  /// Tone and behaviour, e.g. "Reply in Hinglish, be polite"
+  instructions    String    @default("")
+  // ---- Business information
+  companyName     String    @default("")
+  location        String    @default("")
+  industry        String    @default("")
+  /// Name the bot introduces itself with
+  assistantName   String    @default("")
+  primaryGoal     String    @default("")
+  supportEmail    String    @default("")
+  websiteUrl      String    @default("")
+  phoneNumbers    String    @default("")
+  /// Training data: facts, FAQs, policies the bot may use
+  knowledge       String    @default("")
+  // ----
+  welcomeMessage  String    @default("")
+  fallbackMessage String    @default("Thanks for your message! Our team will reply shortly.")
+  useProducts     Boolean   @default(true)
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  flows           Flow[]
+  workingFor      Account[] @relation("WorkingBot")
+  offHoursFor     Account[] @relation("OffHoursBot")
+}
+
+/// Trigger keywords start a sequence of messages (text, images, documents, pauses).
+model Flow {
+  id        String     @id @default(cuid())
+  botId     String
+  bot       Bot        @relation(fields: [botId], references: [id], onDelete: Cascade)
+  name      String
+  /// Comma-separated trigger keywords
+  keywords  String     @default("")
+  /// "exact" | "contains" | "starts"
+  matchType String     @default("exact")
+  /// Runs when no other flow (and no AI answer) fits. One per bot.
+  isNoMatch Boolean    @default(false)
+  enabled   Boolean    @default(true)
+  priority  Int        @default(0)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  steps     FlowStep[]
+}
+
+model FlowStep {
+  id           String @id @default(cuid())
+  flowId       String
+  flow         Flow   @relation(fields: [flowId], references: [id], onDelete: Cascade)
+  position     Int
+  /// "text" | "image" | "document" | "delay"
+  type         String
+  text         String @default("")
+  /// Uploaded file name (in UPLOAD_DIR) or a https:// link
+  media        String @default("")
+  fileName     String @default("")
+  delaySeconds Int    @default(0)
+}
+
+/// A subscriber: someone who messaged one of the numbers
+model Contact {
+  id            String    @id @default(cuid())
+  accountId     String
+  account       Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  waId          String
+  name          String?
+  assignedToId  String?
+  assignedTo    User?     @relation(fields: [assignedToId], references: [id], onDelete: SetNull)
+  botPaused     Boolean   @default(false)
+  needsHuman    Boolean   @default(false)
+  optedOut      Boolean   @default(false)
+  tags          String    @default("")
+  messageCount  Int       @default(0)
+  firstSeenAt   DateTime  @default(now())
+  lastMessageAt DateTime  @default(now())
+  messages      Message[]
+
+  @@unique([accountId, waId])
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  contactId  String
+  contact    Contact  @relation(fields: [contactId], references: [id], onDelete: Cascade)
+  /// "in" | "out"
+  direction  String
+  body       String
+  /// "customer" | "flow" | "ai" | "nomatch" | "fallback" | "welcome" | "system" | "human"
+  sentBy     String
+  /// "text" | "image" | "document"
+  type       String   @default("text")
+  media      String   @default("")
+  externalId String?  @unique
+  createdAt  DateTime @default(now())
+
+  @@index([contactId, createdAt])
+}
+
+model ProductCategory {
+  id          String     @id @default(cuid())
+  workspaceId String?
+  workspace   Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  name        String
+  products    Product[]
+
+  @@unique([workspaceId, name])
+}
+
+model Product {
+  id          String           @id @default(cuid())
+  workspaceId String?
+  workspace   Workspace?       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  categoryId  String?
+  category    ProductCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  name        String
+  sku         String?
+  price       Float?
+  currency    String           @default("INR")
+  description String           @default("")
+  inStock     Boolean          @default(true)
+  imageUrl    String?
+  createdAt   DateTime         @default(now())
+}
+
+/// One-time "forgot password" links. Only a hash of the token is stored.
+model PasswordReset {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+}
