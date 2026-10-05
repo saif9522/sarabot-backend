@@ -111,7 +111,7 @@ export class ChatsController {
       where: {
         account: { workspaceId: ws(u) },
         ...(accountId ? { accountId } : {}),
-        ...(q ? { OR: [{ name: { contains: q } }, { waId: { contains: q.replace(/\D/g, '') || q } }, { tags: { contains: q } }] } : {}),
+        ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { waId: { contains: q.replace(/\D/g, '') || q } }, { tags: { contains: q, mode: 'insensitive' } }] } : {}),
       },
       orderBy: { firstSeenAt: 'desc' },
       take: 1000,

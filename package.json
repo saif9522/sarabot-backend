@@ -8,7 +8,8 @@
     "start:dev": "nest start --watch",
     "db:setup": "prisma migrate dev --name init",
     "typecheck": "tsc --noEmit",
-    "create-admin": "node scripts/create-superadmin.js"
+    "create-admin": "node scripts/create-superadmin.js",
+    "copy-data": "node scripts/copy-sqlite-to-postgres.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",

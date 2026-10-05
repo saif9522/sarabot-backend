@@ -1,11 +1,13 @@
-// SQLite, no Json/enum/list columns: works on any Prisma 5 or 6 version.
+// PostgreSQL (Supabase or any Postgres). DATABASE_URL is used by the app;
+// DIRECT_URL by migrations (Supabase: transaction pooler + session pooler).
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
 }
 
 /// A customer business. Everything (numbers, bots, products, chats) belongs to one.
@@ -24,6 +26,7 @@ model Workspace {
   bots          Bot[]
   categories    ProductCategory[]
   products      Product[]
+  payments      Payment[]
 }
 
 model User {
@@ -66,6 +69,7 @@ model Plan {
   sortOrder    Int            @default(0)
   createdAt    DateTime       @default(now())
   subscriptions Subscription[]
+  payments      Payment[]
 }
 
 model Subscription {
@@ -251,4 +255,35 @@ model PasswordReset {
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime  @default(now())
+}
+
+/// Platform settings editable by the Super Admin (API keys etc.). Secret values are encrypted.
+model Setting {
+  key       String   @id
+  value     String
+  secret    Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+}
+
+/// Online payments (Razorpay). A paid order activates its plan exactly once.
+model Payment {
+  id                String    @id @default(cuid())
+  workspaceId       String
+  workspace         Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  planId            String?
+  plan              Plan?     @relation(fields: [planId], references: [id], onDelete: SetNull)
+  planName          String
+  /// Smallest currency unit (paise)
+  amount            Int
+  currency          String    @default("INR")
+  /// "created" | "paid" | "failed"
+  status            String    @default("created")
+  razorpayOrderId   String    @unique
+  razorpayPaymentId String?
+  subscriptionId    String?
+  paidBy            String    @default("")
+  createdAt         DateTime  @default(now())
+  paidAt            DateTime?
+
+  @@index([workspaceId, createdAt])
 }

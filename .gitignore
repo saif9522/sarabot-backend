@@ -5,3 +5,4 @@ wa-sessions
 prisma/*.db
 prisma/*.db-journal
 uploads
+migration-backup

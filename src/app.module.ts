@@ -18,13 +18,15 @@ import { AuthController } from './auth/auth.controller';
 import { SubscriptionModule } from './billing/subscription.service';
 import { BootstrapModule } from './billing/bootstrap.service';
 import { MailerModule } from './auth/mailer.service';
+import { SettingsModule } from './settings/settings.service';
+import { PaymentsController } from './api/payments.controller';
 import { AdminController } from './api/admin.controller';
 import { AgentsController } from './api/agents.controller';
 import { BillingController } from './api/billing.controller';
 
 @Module({
-  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, RealtimeModule, LlmModule, SubscriptionModule, BootstrapModule, MailerModule, BotModule, SessionModule, InboundModule],
-  controllers: [AuthController, AdminController, AgentsController, BillingController, AccountsController, BotsController, ChatsController, ProductsController, DashboardController, UploadsController],
+  imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SettingsModule, RealtimeModule, LlmModule, SubscriptionModule, BootstrapModule, MailerModule, BotModule, SessionModule, InboundModule],
+  controllers: [AuthController, AdminController, PaymentsController, AgentsController, BillingController, AccountsController, BotsController, ChatsController, ProductsController, DashboardController, UploadsController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
 })
 export class AppModule {}

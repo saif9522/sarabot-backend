@@ -7,6 +7,7 @@ import { AnyUser, AuthUser, CurrentUser, Public } from './auth.guard';
 import { ACT_AS_COOKIE, SESSION_COOKIE, hashPassword, signToken, verifyPassword } from './crypto';
 import { SubscriptionService } from '../billing/subscription.service';
 import { MailerService } from './mailer.service';
+import { SettingsService } from '../settings/settings.service';
 
 class LoginDto {
   @IsEmail() email!: string;
@@ -36,7 +37,7 @@ export class AuthController {
   private attempts = new Map<string, { n: number; until: number }>();
   /** Simple in-memory limits: key -> timestamps */
   private hits = new Map<string, number[]>();
-  constructor(private prisma: PrismaService, private subs: SubscriptionService, private mailer: MailerService) {}
+  constructor(private prisma: PrismaService, private subs: SubscriptionService, private mailer: MailerService, private settings: SettingsService) {}
 
   private limited(key: string, max: number, windowMs: number) {
     const now = Date.now();
@@ -52,14 +53,14 @@ export class AuthController {
   @Get('signup-info')
   async signupInfo() {
     const trial = await this.prisma.plan.findFirst({ where: { trialForSignup: true, active: true }, select: { name: true, chatLimit: true, durationDays: true } });
-    return { open: process.env.ALLOW_SIGNUP !== 'false', trial, emailConfigured: this.mailer.configured };
+    return { open: this.settings.get('ALLOW_SIGNUP', 'true') !== 'false', trial, emailConfigured: this.mailer.configured };
   }
 
   /** A business signs itself up: creates its workspace with this person as Owner. */
   @Public()
   @Post('signup')
   async signup(@Body() dto: SignupDto, @Ip() ip: string, @Res({ passthrough: true }) res: Response) {
-    if (process.env.ALLOW_SIGNUP === 'false') throw new ForbiddenException('Sign-up is closed. Contact us to get an account.');
+    if (this.settings.get('ALLOW_SIGNUP', 'true') === 'false') throw new ForbiddenException('Sign-up is closed. Contact us to get an account.');
     if (this.limited(`signup:${ip}`, 5, 3600_000)) throw new ForbiddenException('Too many sign-ups from this network. Try again later.');
     const email = dto.email.trim().toLowerCase();
     if (await this.prisma.user.findUnique({ where: { email } })) throw new ConflictException('An account with this email already exists. Sign in or reset your password.');

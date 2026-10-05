@@ -7,6 +7,8 @@ import { ACT_AS_COOKIE, hashPassword } from '../auth/crypto';
 import { cookieOpts } from '../auth/auth.controller';
 import { SubscriptionService } from '../billing/subscription.service';
 import { SessionManager } from '../whatsapp/session.manager';
+import { SETTING_KEYS, SettingKey, SettingsService } from '../settings/settings.service';
+import { Query } from '@nestjs/common';
 
 class PlanDto {
   @IsString() @MinLength(1) @MaxLength(80) name!: string;
@@ -49,12 +51,18 @@ class ActivateDto {
   @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 class ResetPasswordDto { @IsString() @MinLength(8) @MaxLength(200) password!: string }
+class UserPatchDto {
+  @IsOptional() @IsBoolean() active?: boolean;
+  @IsOptional() @IsString() @MinLength(1) @MaxLength(120) name?: string;
+  @IsOptional() @IsString() @MaxLength(20) mobile?: string;
+  @IsOptional() @IsIn(['owner', 'admin', 'agent']) role?: 'owner' | 'admin' | 'agent';
+}
 
 /** Super Admin: customers, plans and subscriptions. */
 @Roles('superadmin')
 @Controller('admin')
 export class AdminController {
-  constructor(private prisma: PrismaService, private subs: SubscriptionService, private sessions: SessionManager) {}
+  constructor(private prisma: PrismaService, private subs: SubscriptionService, private sessions: SessionManager, private settings: SettingsService) {}
 
   @Get('overview')
   async overview() {
@@ -73,8 +81,21 @@ export class AdminController {
       this.prisma.plan.count({ where: { active: true } }),
     ]);
     const paying = new Set(activeSubs.map((s) => s.workspaceId)).size;
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const [users, numbers, subscribers, msgIn, botReplies, paymentsToday] = await Promise.all([
+      this.prisma.user.groupBy({ by: ['role'], where: { role: { not: 'superadmin' } }, _count: true }),
+      this.prisma.account.findMany({ select: { id: true } }),
+      this.prisma.contact.count(),
+      this.prisma.message.count({ where: { direction: 'in', createdAt: { gte: today } } }),
+      this.prisma.message.count({ where: { direction: 'out', sentBy: { not: 'human' }, createdAt: { gte: today } } }),
+      this.prisma.payment.count({ where: { status: 'paid', paidAt: { gte: today } } }),
+    ]);
+    const role = (r: string) => users.find((x) => x.role === r)?._count ?? 0;
     return {
       customers, suspended, paying, withoutPlan: customers - paying, activePlans: plans,
+      people: { owners: role('owner'), admins: role('admin'), agents: role('agent') },
+      numbers: { total: numbers.length, connected: numbers.filter((n) => this.sessions.isConnected(n.id)).length },
+      subscribers, today: { received: msgIn, botReplies, payments: paymentsToday },
       revenueThisMonth: revenue.map((r) => ({ currency: r.currency, amount: r._sum.amountPaid ?? 0 })),
       expiringSoon: expiring.map((s) => ({ workspaceId: s.workspace.id, name: s.workspace.name, planName: s.planName, endsAt: s.endsAt })),
     };
@@ -134,15 +155,25 @@ export class AdminController {
     const w = await this.prisma.workspace.findUnique({
       where: { id },
       include: {
-        users: { select: { id: true, name: true, email: true, mobile: true, role: true, active: true, lastLoginAt: true, createdAt: true }, orderBy: { createdAt: 'asc' } },
+        users: {
+          select: { id: true, name: true, email: true, mobile: true, role: true, active: true, seeUnassigned: true, lastLoginAt: true, createdAt: true, _count: { select: { assigned: true } } },
+          orderBy: { createdAt: 'asc' },
+        },
         subscriptions: { orderBy: { startsAt: 'desc' } },
+        payments: { orderBy: { createdAt: 'desc' }, take: 50 },
         accounts: { select: { id: true, label: true, phone: true } },
         _count: { select: { bots: true, products: true } },
       },
     });
     if (!w) throw new NotFoundException();
+    const [subscribers, messages, botReplies] = await Promise.all([
+      this.prisma.contact.count({ where: { account: { workspaceId: id } } }),
+      this.prisma.message.count({ where: { contact: { account: { workspaceId: id } } } }),
+      this.prisma.message.count({ where: { direction: 'out', sentBy: { not: 'human' }, contact: { account: { workspaceId: id } } } }),
+    ]);
     return {
       ...w,
+      stats: { subscribers, messages, botReplies },
       accounts: w.accounts.map((a) => ({ ...a, status: this.sessions.state(a.id).status })),
       plan: await this.subs.status(id),
     };
@@ -183,28 +214,78 @@ export class AdminController {
     return { deleted: id };
   }
 
+  // ---------- Everyone (owners, admins, agents) across all customers
+  @Get('users')
+  users(@Query('q') q?: string, @Query('role') role?: string, @Query('status') status?: string) {
+    const term = q?.trim();
+    return this.prisma.user.findMany({
+      where: {
+        role: role && ['owner', 'admin', 'agent'].includes(role) ? role : { not: 'superadmin' },
+        ...(status === 'active' ? { active: true } : status === 'disabled' ? { active: false } : {}),
+        ...(term ? { OR: [
+          { name: { contains: term, mode: 'insensitive' } }, { email: { contains: term, mode: 'insensitive' } },
+          { mobile: { contains: term } }, { workspace: { name: { contains: term, mode: 'insensitive' } } },
+        ] } : {}),
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 1000,
+      select: {
+        id: true, name: true, email: true, mobile: true, role: true, active: true, seeUnassigned: true, createdAt: true, lastLoginAt: true,
+        workspace: { select: { id: true, name: true, status: true } }, _count: { select: { assigned: true } },
+      },
+    });
+  }
+
+  @Patch('users/:userId')
+  async updateUser(@Param('userId') userId: string, @Body() dto: UserPatchDto) {
+    const u = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!u || u.role === 'superadmin') throw new NotFoundException();
+    const data = { ...dto, ...(dto.active === false ? { sessionVersion: { increment: 1 } } : {}) }; // disabling signs them out
+    const updated = await this.prisma.user.update({ where: { id: userId }, data, select: { id: true, active: true, role: true } });
+    if (dto.active === false) await this.prisma.contact.updateMany({ where: { assignedToId: userId }, data: { assignedToId: null } });
+    return updated;
+  }
+
+  @Delete('users/:userId')
+  async deleteUser(@Param('userId') userId: string) {
+    const u = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!u || u.role === 'superadmin') throw new NotFoundException();
+    await this.prisma.user.delete({ where: { id: userId } });
+    return { deleted: userId };
+  }
+
+  // ---------- Payments
+  @Get('payments')
+  payments(@Query('status') status?: string) {
+    return this.prisma.payment.findMany({
+      where: status ? { status } : {},
+      orderBy: { createdAt: 'desc' }, take: 500,
+      include: { workspace: { select: { id: true, name: true } } },
+    });
+  }
+
+  // ---------- Platform settings (API keys)
+  @Get('settings')
+  getSettings() {
+    return this.settings.list();
+  }
+
+  @Patch('settings')
+  async saveSettings(@Body() body: Record<string, unknown>) {
+    for (const [k, v] of Object.entries(body ?? {})) {
+      if (!(k in SETTING_KEYS)) throw new BadRequestException(`Unknown setting ${k}`);
+      if (typeof v !== 'string' || v.length > 500) throw new BadRequestException(`Invalid value for ${k}`);
+      await this.settings.set(k as SettingKey, v.trim());
+    }
+    return this.settings.list();
+  }
+
   // ---------- Subscriptions
   @Post('customers/:id/subscriptions')
   async activate(@Param('id') workspaceId: string, @Body() dto: ActivateDto, @CurrentUser() me: AuthUser) {
     const plan = await this.prisma.plan.findUnique({ where: { id: dto.planId } });
     if (!plan) throw new BadRequestException('Plan not found');
-    const now = new Date();
-    let startsAt = now;
-    if (dto.start === 'after') {
-      const last = await this.prisma.subscription.findFirst({ where: { workspaceId, status: 'active', endsAt: { gt: now } }, orderBy: { endsAt: 'desc' } });
-      if (last) startsAt = last.endsAt;
-    } else {
-      // Starting now replaces whatever is running today.
-      await this.prisma.subscription.updateMany({ where: { workspaceId, status: 'active', startsAt: { lte: now }, endsAt: { gt: now } }, data: { endsAt: now } });
-    }
-    const days = dto.durationDays ?? plan.durationDays;
-    const endsAt = new Date(startsAt.getTime() + days * 86400_000);
-    return this.prisma.subscription.create({
-      data: {
-        workspaceId, planId: plan.id, planName: plan.name, chatLimit: plan.chatLimit, numbersLimit: plan.numbersLimit, agentsLimit: plan.agentsLimit,
-        startsAt, endsAt, amountPaid: dto.amountPaid ?? plan.price, currency: plan.currency, note: dto.note ?? '', activatedBy: me.email,
-      },
-    });
+    return this.subs.activate(workspaceId, plan, { start: dto.start, durationDays: dto.durationDays, amountPaid: dto.amountPaid, note: dto.note, activatedBy: me.email });
   }
 
   @Post('subscriptions/:subId/cancel')

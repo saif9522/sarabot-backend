@@ -1,4 +1,5 @@
 import { Global, Injectable, Logger, Module } from '@nestjs/common';
+import { SettingsService } from './settings/settings.service';
 
 type Provider = 'gemini' | 'anthropic' | null;
 
@@ -9,9 +10,10 @@ type Provider = 'gemini' | 'anthropic' | null;
 @Injectable()
 export class LlmService {
   private readonly log = new Logger('AI');
+  constructor(private settings: SettingsService) {}
 
   get provider(): Provider {
-    if (process.env.GEMINI_API_KEY) return 'gemini';
+    if (this.settings.get('GEMINI_API_KEY')) return 'gemini';
     if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
     return null;
   }
@@ -30,10 +32,10 @@ export class LlmService {
   }
 
   private async gemini(system: string, prompt: string, maxTokens: number): Promise<string> {
-    const model = process.env.LLM_MODEL || 'gemini-2.5-flash';
+    const model = this.settings.get('LLM_MODEL', 'gemini-2.5-flash');
     const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
-      headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY || '', 'content-type': 'application/json' },
+      headers: { 'x-goog-api-key': this.settings.get('GEMINI_API_KEY'), 'content-type': 'application/json' },
       body: JSON.stringify({
         systemInstruction: { parts: [{ text: system }] },
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
@@ -50,7 +52,7 @@ export class LlmService {
     if (!res.ok) {
       const body = await res.text();
       this.log.error(`Gemini ${res.status}: ${body.slice(0, 300)}`);
-      throw new Error(res.status === 400 || res.status === 403 ? 'Gemini rejected the request — check GEMINI_API_KEY and LLM_MODEL' : `Gemini request failed (${res.status})`);
+      throw new Error(res.status === 400 || res.status === 403 ? 'Gemini rejected the request — check the Gemini API key and model in Platform settings' : `Gemini request failed (${res.status})`);
     }
     const data: any = await res.json();
     const cand = data.candidates?.[0];

@@ -48,7 +48,7 @@ export class ProductsController {
       where: {
         workspaceId: ws(u),
         ...(categoryId ? { categoryId } : {}),
-        ...(q ? { OR: [{ name: { contains: q } }, { sku: { contains: q } }, { description: { contains: q } }] } : {}),
+        ...(q ? { OR: [{ name: { contains: q, mode: 'insensitive' } }, { sku: { contains: q, mode: 'insensitive' } }, { description: { contains: q, mode: 'insensitive' } }] } : {}),
       },
       orderBy: { name: 'asc' },
       include: { category: { select: { id: true, name: true } } },

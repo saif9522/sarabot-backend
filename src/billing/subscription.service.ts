@@ -1,5 +1,5 @@
 import { Global, Injectable, Module } from '@nestjs/common';
-import { Subscription } from '@prisma/client';
+import { Plan, Prisma, Subscription } from '@prisma/client';
 import { PrismaService } from '../prisma.service';
 
 export interface PlanStatus {
@@ -85,6 +85,34 @@ export class SubscriptionService {
   async refund(workspaceId: string) {
     const sub = await this.current(workspaceId);
     if (sub && sub.chatsUsed > 0) await this.prisma.subscription.update({ where: { id: sub.id }, data: { chatsUsed: { decrement: 1 } } });
+  }
+
+  /**
+   * Start a plan for a workspace.
+   *  'now'   – starts today and ends whatever is running
+   *  'after' – starts when the latest running/queued plan ends (renewal); today if none
+   */
+  async activate(
+    workspaceId: string, plan: Plan,
+    opts: { start: 'now' | 'after'; durationDays?: number; amountPaid?: number; note?: string; activatedBy: string },
+    tx: Prisma.TransactionClient = this.prisma,
+  ) {
+    const now = new Date();
+    let startsAt = now;
+    if (opts.start === 'after') {
+      const last = await tx.subscription.findFirst({ where: { workspaceId, status: 'active', endsAt: { gt: now } }, orderBy: { endsAt: 'desc' } });
+      if (last) startsAt = last.endsAt;
+    } else {
+      await tx.subscription.updateMany({ where: { workspaceId, status: 'active', startsAt: { lte: now }, endsAt: { gt: now } }, data: { endsAt: now } });
+    }
+    const days = opts.durationDays ?? plan.durationDays;
+    return tx.subscription.create({
+      data: {
+        workspaceId, planId: plan.id, planName: plan.name, chatLimit: plan.chatLimit, numbersLimit: plan.numbersLimit, agentsLimit: plan.agentsLimit,
+        startsAt, endsAt: new Date(startsAt.getTime() + days * 86400_000), amountPaid: opts.amountPaid ?? plan.price, currency: plan.currency,
+        note: opts.note ?? '', activatedBy: opts.activatedBy,
+      },
+    });
   }
 
   async limits(workspaceId: string) {

@@ -6,7 +6,8 @@ import { AppModule } from './app.module';
 import { UPLOAD_DIR } from './media';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  // rawBody: needed to verify Razorpay webhook signatures
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
   // Uploaded flow images/documents, e.g. http://localhost:4100/uploads/123.jpg
   app.useStaticAssets(UPLOAD_DIR, { prefix: '/uploads/', index: false, dotfiles: 'deny' });
   app.setGlobalPrefix('api');
