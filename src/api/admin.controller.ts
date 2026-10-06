@@ -275,6 +275,31 @@ export class AdminController {
     });
   }
 
+  /**
+   * Money arrived but the plan didn't start (browser closed, webhook missing, ...):
+   * mark the payment paid and start its plan. Same plan as the running one = renewal after it, otherwise starts now.
+   */
+  @Post('payments/:id/activate')
+  @HttpCode(200)
+  async activatePayment(@Param('id') id: string, @Body() body: { razorpayPaymentId?: string }, @CurrentUser() me: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const p = await tx.payment.findUnique({ where: { id } });
+      if (!p) throw new NotFoundException('Payment not found');
+      if (p.subscriptionId) throw new ConflictException('This payment already started a plan.');
+      const plan = p.planId ? await tx.plan.findUnique({ where: { id: p.planId } }) : null;
+      if (!plan) throw new BadRequestException('The plan of this payment no longer exists. Use "Activate plan" on the customer instead.');
+      const now = new Date();
+      const running = await tx.subscription.findFirst({ where: { workspaceId: p.workspaceId, status: 'active', startsAt: { lte: now }, endsAt: { gt: now } }, orderBy: { startsAt: 'desc' } });
+      const start: 'now' | 'after' = running && running.planId === plan.id ? 'after' : 'now';
+      const payId = typeof body?.razorpayPaymentId === 'string' && body.razorpayPaymentId.trim() ? body.razorpayPaymentId.trim().slice(0, 100) : p.razorpayPaymentId;
+      const sub = await this.subs.activate(p.workspaceId, plan, {
+        start, amountPaid: p.amount / 100, note: `Razorpay ${payId ?? p.razorpayOrderId} (activated by hand)`, activatedBy: me.email,
+      }, tx);
+      await tx.payment.update({ where: { id: p.id }, data: { status: 'paid', paidAt: p.paidAt ?? now, razorpayPaymentId: payId, subscriptionId: sub.id } });
+      return { ok: true, planName: sub.planName, startsAt: sub.startsAt, endsAt: sub.endsAt };
+    });
+  }
+
   // ---------- Platform settings (API keys)
   @Get('settings')
   getSettings() {
