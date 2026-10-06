@@ -3,13 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "build": "nest build",
+    "build": "prisma generate && nest build",
     "start": "node dist/main",
     "start:dev": "nest start --watch",
     "db:setup": "prisma migrate dev --name init",
     "typecheck": "tsc --noEmit",
     "create-admin": "node scripts/create-superadmin.js",
-    "copy-data": "node scripts/copy-sqlite-to-postgres.js"
+    "copy-data": "node scripts/copy-sqlite-to-postgres.js",
+    "postinstall": "prisma generate",
+    "start:prod": "prisma migrate deploy && node dist/main"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",
@@ -27,16 +29,15 @@
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1",
     "socket.io": "^4.7.5",
-    "nodemailer": "^6.9.15"
-  },
-  "devDependencies": {
+    "nodemailer": "^6.9.15",
+    "prisma": "^6.16.0",
     "@nestjs/cli": "^10.4.0",
+    "typescript": "^5.5.0",
     "@types/express": "^4.17.21",
     "@types/node": "^20.14.0",
     "@types/qrcode": "^1.5.5",
-    "prisma": "^6.16.0",
-    "typescript": "^5.5.0",
     "@types/multer": "^1.4.12",
     "@types/nodemailer": "^6.4.16"
-  }
+  },
+  "devDependencies": {}
 }

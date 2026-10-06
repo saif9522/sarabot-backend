@@ -47,6 +47,7 @@ model User {
   /// Bumped on password change/reset: signs out every existing session
   sessionVersion Int       @default(0)
   resets        PasswordReset[]
+  loginCodes    LoginCode[]
   createdAt     DateTime   @default(now())
   assigned      Contact[]
 }
@@ -286,4 +287,18 @@ model Payment {
   paidAt            DateTime?
 
   @@index([workspaceId, createdAt])
+}
+
+/// One-time email sign-in codes (OTP). Only an HMAC of the code is stored.
+model LoginCode {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int       @default(0)
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId, createdAt])
 }

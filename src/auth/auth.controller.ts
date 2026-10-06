@@ -1,5 +1,5 @@
 import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, HttpCode, Ip, Post, Query, Res, UnauthorizedException } from '@nestjs/common';
-import { createHash, randomBytes } from 'crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'crypto';
 import { Response } from 'express';
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma.service';
@@ -21,6 +21,11 @@ class SignupDto {
   @IsString() @MinLength(8) @MaxLength(200) password!: string;
 }
 class ForgotDto { @IsEmail() email!: string }
+class OtpRequestDto { @IsEmail() email!: string }
+class OtpVerifyDto {
+  @IsEmail() email!: string;
+  @IsString() @MinLength(6) @MaxLength(6) code!: string;
+}
 class ResetDto {
   @IsString() @MinLength(20) @MaxLength(200) token!: string;
   @IsString() @MinLength(8) @MaxLength(200) password!: string;
@@ -81,6 +86,70 @@ export class AuthController {
     const owner = ws.users[0];
     res.cookie(SESSION_COOKIE, signToken(owner.id, owner.sessionVersion), { ...cookieOpts, maxAge: 7 * 86400_000 });
     return { ok: true, role: 'owner', trial: !!trial };
+  }
+
+  // ---------- Email OTP sign-in
+  private static readonly OTP_TTL_MS = 10 * 60_000;
+  private static readonly OTP_MAX_ATTEMPTS = 5;
+  private otpHash(userId: string, code: string) {
+    return createHmac('sha256', `otp:${process.env.SESSION_SECRET || 'dev-only-secret-change-me-dev-only-secret'}`).update(`${userId}:${code}`).digest('hex');
+  }
+
+  /** Sends a 6-digit code. Same reply whether or not the email has an account. */
+  @Public()
+  @Post('otp/request')
+  @HttpCode(200)
+  async otpRequest(@Body() dto: OtpRequestDto, @Ip() ip: string) {
+    const email = dto.email.trim().toLowerCase();
+    const reply = { ok: true, message: `If ${email} has an account, a 6-digit code is on its way. It works for 10 minutes.` };
+    if (this.limited(`otp-ip:${ip}`, 20, 3600_000)) throw new ForbiddenException('Too many code requests from this network. Try again later.');
+    if (this.limited(`otp-gap:${email}`, 1, 55_000)) throw new ForbiddenException('Please wait a minute before asking for another code.');
+    if (this.limited(`otp:${email}`, 6, 3600_000)) return reply;
+
+    const u = await this.prisma.user.findUnique({ where: { email }, include: { workspace: { select: { status: true } } } });
+    if (!u || !u.active || (u.role !== 'superadmin' && u.workspace?.status !== 'active')) return reply;
+
+    const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
+    await this.prisma.loginCode.deleteMany({ where: { userId: u.id, usedAt: null } }); // only the newest code works
+    await this.prisma.loginCode.create({ data: { userId: u.id, codeHash: this.otpHash(u.id, code), expiresAt: new Date(Date.now() + AuthController.OTP_TTL_MS) } });
+    const text = `Your SAIF Chat sign-in code is ${code}\n\nIt works for 10 minutes. If you didn't try to sign in, ignore this email.`;
+    const html = `<p>Your SAIF Chat sign-in code is</p><p style="font-size:28px;font-weight:700;letter-spacing:6px;font-family:monospace">${code}</p>`
+      + `<p>It works for 10 minutes. If you didn't try to sign in, ignore this email — nobody can sign in without this code.</p>`;
+    try {
+      await this.mailer.send(email, `${code} is your SAIF Chat sign-in code`, text, html);
+    } catch (e) {
+      console.error('Sign-in code email failed:', (e as Error).message);
+    }
+    return reply;
+  }
+
+  @Public()
+  @Post('otp/verify')
+  @HttpCode(200)
+  async otpVerify(@Body() dto: OtpVerifyDto, @Res({ passthrough: true }) res: Response) {
+    const email = dto.email.trim().toLowerCase();
+    const wrong = new UnauthorizedException('That code is wrong or has expired. Check the latest email or ask for a new code.');
+    if (!/^\d{6}$/.test(dto.code)) throw wrong;
+    const u = await this.prisma.user.findUnique({ where: { email }, include: { workspace: { select: { status: true } } } });
+    if (!u || !u.active || (u.role !== 'superadmin' && u.workspace?.status !== 'active')) throw wrong;
+    const lc = await this.prisma.loginCode.findFirst({ where: { userId: u.id, usedAt: null }, orderBy: { createdAt: 'desc' } });
+    if (!lc || lc.expiresAt < new Date() || lc.attempts >= AuthController.OTP_MAX_ATTEMPTS) throw wrong;
+
+    // Count the attempt first, atomically, so parallel guesses can't exceed the limit.
+    const counted = await this.prisma.loginCode.updateMany({ where: { id: lc.id, usedAt: null, attempts: { lt: AuthController.OTP_MAX_ATTEMPTS } }, data: { attempts: { increment: 1 } } });
+    if (counted.count !== 1) throw wrong;
+    const expected = Buffer.from(lc.codeHash, 'hex');
+    const got = Buffer.from(this.otpHash(u.id, dto.code), 'hex');
+    if (expected.length !== got.length || !timingSafeEqual(expected, got)) {
+      if (lc.attempts + 1 >= AuthController.OTP_MAX_ATTEMPTS) throw new UnauthorizedException('Too many wrong codes. Ask for a new code.');
+      throw wrong;
+    }
+    const used = await this.prisma.loginCode.updateMany({ where: { id: lc.id, usedAt: null }, data: { usedAt: new Date() } });
+    if (used.count !== 1) throw wrong; // already used by a parallel request
+    await this.prisma.user.update({ where: { id: u.id }, data: { lastLoginAt: new Date() } });
+    res.cookie(SESSION_COOKIE, signToken(u.id, u.sessionVersion), { ...cookieOpts, maxAge: 7 * 86400_000 });
+    res.clearCookie(ACT_AS_COOKIE, cookieOpts);
+    return { ok: true, role: u.role };
   }
 
   /** Always answers the same way, so nobody can find out which emails have accounts. */
