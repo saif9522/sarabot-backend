@@ -35,7 +35,10 @@ class PasswordDto {
   @IsString() @MinLength(8) @MaxLength(200) next!: string;
 }
 
-const cookieOpts = { httpOnly: true, sameSite: 'lax' as const, secure: process.env.COOKIE_SECURE === 'true', path: '/' };
+// Over https (COOKIE_SECURE=true) the dashboard and API usually live on different domains
+// (e.g. *.vercel.app and *.onrender.com), which needs SameSite=None; locally Lax is enough.
+const secureCookies = process.env.COOKIE_SECURE === 'true';
+const cookieOpts = { httpOnly: true, sameSite: (secureCookies ? 'none' : 'lax') as 'none' | 'lax', secure: secureCookies, path: '/' };
 
 @Controller('auth')
 export class AuthController {
