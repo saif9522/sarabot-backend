@@ -1,6 +1,24 @@
 import * as path from 'path';
 
-export const UPLOAD_DIR = path.resolve(process.env.UPLOAD_DIR || './uploads');
+import { accessSync, constants as fsc, mkdirSync } from 'fs';
+
+/** Use the configured folder if we can write to it, otherwise a local one (e.g. /var/data without a disk on Render). */
+export function writableDir(configured: string | undefined, fallback: string): string {
+  for (const dir of [configured, fallback].filter(Boolean) as string[]) {
+    const full = path.resolve(dir);
+    try {
+      mkdirSync(full, { recursive: true });
+      accessSync(full, fsc.W_OK);
+      if (configured && path.resolve(configured) !== full) console.warn(`[Storage] ${configured} is not writable, using ${full} instead`);
+      return full;
+    } catch {
+      /* try the next one */
+    }
+  }
+  return path.resolve(fallback);
+}
+
+export const UPLOAD_DIR = writableDir(process.env.UPLOAD_DIR, './uploads');
 
 /** Local uploaded file path for a stored media value, or null if it is an external link. */
 export function localMediaPath(media: string): string | null {
