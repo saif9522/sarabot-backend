@@ -6,6 +6,7 @@ import { PrismaService } from '../prisma.service';
 export const SETTING_KEYS = {
   GEMINI_API_KEY: { secret: true, label: 'Gemini API key' },
   LLM_MODEL: { secret: false, label: 'AI model' },
+  LLM_FALLBACK_MODEL: { secret: false, label: 'Backup AI models (comma separated)' },
   RAZORPAY_KEY_ID: { secret: false, label: 'Razorpay key ID' },
   RAZORPAY_KEY_SECRET: { secret: true, label: 'Razorpay key secret' },
   RAZORPAY_WEBHOOK_SECRET: { secret: true, label: 'Razorpay webhook secret' },
