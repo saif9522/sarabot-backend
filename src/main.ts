@@ -16,6 +16,6 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const port = Number(process.env.PORT || 4100);
   await app.listen(port);
-  console.log(`SAIF Chat API on http://localhost:${port}/api`);
+  console.log(`Sarabot API on http://localhost:${port}/api`);
 }
 bootstrap();

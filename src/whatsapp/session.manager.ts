@@ -123,7 +123,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     const sock = makeWASocket({
       auth: state,
       ...(version ? { version } : {}),
-      browser: Browsers.windows('SAIF Chat'),
+      browser: Browsers.windows('Sarabot'),
       logger: pino({ level: 'silent' }) as any,
       markOnlineOnConnect: false,
       syncFullHistory: false,

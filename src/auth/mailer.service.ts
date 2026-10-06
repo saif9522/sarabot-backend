@@ -36,7 +36,7 @@ export class MailerService {
 
   private sender() {
     const email = process.env.MAIL_FROM_EMAIL || process.env.SMTP_USER || '';
-    const name = process.env.MAIL_FROM_NAME || 'SAIF Chat';
+    const name = process.env.MAIL_FROM_NAME || 'Sarabot';
     // SMTP_FROM may already be "Name <email>"
     const m = /^(.*)<([^>]+)>\s*$/.exec(process.env.SMTP_FROM || '');
     return m && !process.env.MAIL_FROM_EMAIL ? { name: m[1].trim() || name, email: m[2].trim() } : { name, email };

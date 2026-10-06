@@ -115,11 +115,11 @@ export class AuthController {
     const code = String(randomInt(0, 1_000_000)).padStart(6, '0');
     await this.prisma.loginCode.deleteMany({ where: { userId: u.id, usedAt: null } }); // only the newest code works
     await this.prisma.loginCode.create({ data: { userId: u.id, codeHash: this.otpHash(u.id, code), expiresAt: new Date(Date.now() + AuthController.OTP_TTL_MS) } });
-    const text = `Your SAIF Chat sign-in code is ${code}\n\nIt works for 10 minutes. If you didn't try to sign in, ignore this email.`;
-    const html = `<p>Your SAIF Chat sign-in code is</p><p style="font-size:28px;font-weight:700;letter-spacing:6px;font-family:monospace">${code}</p>`
+    const text = `Your Sarabot sign-in code is ${code}\n\nIt works for 10 minutes. If you didn't try to sign in, ignore this email.`;
+    const html = `<p>Your Sarabot sign-in code is</p><p style="font-size:28px;font-weight:700;letter-spacing:6px;font-family:monospace">${code}</p>`
       + `<p>It works for 10 minutes. If you didn't try to sign in, ignore this email — nobody can sign in without this code.</p>`;
     try {
-      await this.mailer.send(email, `${code} is your SAIF Chat sign-in code`, text, html);
+      await this.mailer.send(email, `${code} is your Sarabot sign-in code`, text, html);
     } catch (e) {
       console.error('Sign-in code email failed:', (e as Error).message);
     }
@@ -172,12 +172,12 @@ export class AuthController {
       data: { userId: u.id, tokenHash: createHash('sha256').update(token).digest('hex'), expiresAt: new Date(Date.now() + 3600_000) },
     });
     const link = `${process.env.FRONTEND_URL || 'http://localhost:3100'}/reset-password?token=${token}`;
-    const text = `Hi ${u.name},\n\nSomeone asked to reset the password for your SAIF Chat account (${email}).\nSet a new password here (works for 1 hour):\n${link}\n\nIf this wasn't you, ignore this email — your password stays the same.`;
-    const html = `<p>Hi ${u.name.replace(/[<>&"]/g, '')},</p><p>Someone asked to reset the password for your SAIF Chat account.</p>`
+    const text = `Hi ${u.name},\n\nSomeone asked to reset the password for your Sarabot account (${email}).\nSet a new password here (works for 1 hour):\n${link}\n\nIf this wasn't you, ignore this email — your password stays the same.`;
+    const html = `<p>Hi ${u.name.replace(/[<>&"]/g, '')},</p><p>Someone asked to reset the password for your Sarabot account.</p>`
       + `<p><a href="${link}" style="display:inline-block;background:#0B7A5C;color:#fff;padding:10px 18px;border-radius:8px;text-decoration:none">Set a new password</a></p>`
       + `<p>The link works for 1 hour. If this wasn't you, ignore this email — your password stays the same.</p>`;
     try {
-      await this.mailer.send(email, 'Reset your SAIF Chat password', text, html);
+      await this.mailer.send(email, 'Reset your Sarabot password', text, html);
     } catch (e) {
       // Don't reveal mail problems to the requester; the operator sees them in the log.
       console.error('Password reset email failed:', (e as Error).message);
