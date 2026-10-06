@@ -27,6 +27,16 @@ const MAX_RETRIES = 4;
 const START_TIMEOUT_MS = 60_000;
 
 /**
+ * How long "typing…" shows before a text reply: TYPING_MIN_MS + TYPING_MS_PER_CHAR per character, capped at TYPING_MAX_MS.
+ * Defaults (700 / 25 / 4000) look human. Set TYPING_MAX_MS=0 to reply with no typing pause at all.
+ */
+const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && !Number.isNaN(Number(v)) ? Math.max(0, Number(v)) : d);
+const TYPING_MIN_MS = num(process.env.TYPING_MIN_MS, 700);
+const TYPING_MS_PER_CHAR = num(process.env.TYPING_MS_PER_CHAR, 25);
+const TYPING_MAX_MS = num(process.env.TYPING_MAX_MS, 4000);
+const MEDIA_DELAY_MS = num(process.env.MEDIA_DELAY_MS, 800);
+
+/**
  * One WhatsApp Web connection per linked number (QR scan, like web.whatsapp.com).
  * Sessions are saved per number and reconnect automatically on startup.
  * Unofficial protocol: the bot only answers people who message first, ignores groups,
@@ -231,7 +241,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     if (!s?.sock || s.state.status !== 'connected') throw new Error('This number is not connected');
     const jid = toJid(to);
     await s.sock.sendPresenceUpdate('composing', jid).catch(() => undefined);
-    await sleep(Math.min(4000, 700 + text.length * 25));
+    await sleep(Math.min(TYPING_MAX_MS, TYPING_MIN_MS + text.length * TYPING_MS_PER_CHAR));
     const res = await s.sock.sendMessage(jid, { text });
     await s.sock.sendPresenceUpdate('paused', jid).catch(() => undefined);
     return res?.key?.id ?? undefined;
@@ -244,7 +254,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     const local = localMediaPath(m.media);
     const source = local ? await fs.readFile(local) : { url: m.media };
     const jid = toJid(to);
-    await sleep(800);
+    await sleep(MEDIA_DELAY_MS);
     const res =
       m.type === 'image'
         ? await s.sock.sendMessage(jid, { image: source, caption: m.caption })
