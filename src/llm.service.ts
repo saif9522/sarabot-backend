@@ -32,8 +32,8 @@ export class LlmService {
   }
 
   private async gemini(system: string, prompt: string, maxTokens: number): Promise<string> {
-    const model = this.settings.get('LLM_MODEL', 'gemini-2.5-flash');
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+    const model = this.settings.get('LLM_MODEL', 'gemini-3.8-flash').trim();
+    const call = (withThinkingOff: boolean) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'x-goog-api-key': this.settings.get('GEMINI_API_KEY'), 'content-type': 'application/json' },
       body: JSON.stringify({
@@ -42,21 +42,30 @@ export class LlmService {
         generationConfig: {
           responseMimeType: 'application/json',
           temperature: 0.4,
-          // 2.5 models "think" first and that counts against the output limit; leave room.
+          // Newer models "think" first and that counts against the output limit; leave room.
           maxOutputTokens: maxTokens + 2048,
-          // Flash models can skip thinking entirely: faster, cheaper replies.
-          ...(/flash/i.test(model) ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
+          // Flash models can usually skip thinking: faster, cheaper replies. Retried without it if a model refuses.
+          ...(withThinkingOff ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
         },
       }),
     });
+    let res = await call(/flash/i.test(model));
+    if (res.status === 400 && /flash/i.test(model)) {
+      const body = await res.clone().text();
+      if (/thinking/i.test(body)) res = await call(false); // model doesn't accept thinkingBudget: 0
+    }
     if (!res.ok) {
       const body = await res.text();
-      this.log.error(`Gemini ${res.status}: ${body.slice(0, 300)}`);
-      throw new Error(res.status === 400 || res.status === 403 ? 'Gemini rejected the request — check the Gemini API key and model in Platform settings' : `Gemini request failed (${res.status})`);
+      this.log.error(`Gemini ${res.status} (model ${model}): ${body.slice(0, 300)}`);
+      throw new Error(
+        res.status === 404 ? `Gemini model "${model}" is not available — set LLM_MODEL to a current model`
+        : res.status === 400 || res.status === 403 ? 'Gemini rejected the request — check the Gemini API key and model in Platform settings'
+        : `Gemini request failed (${res.status})`,
+      );
     }
     const data: any = await res.json();
     const cand = data.candidates?.[0];
-    const text = (cand?.content?.parts || []).map((p: any) => p.text || '').join('');
+    const text = (cand?.content?.parts || []).filter((p: any) => !p.thought).map((p: any) => p.text || '').join('');
     if (!text) throw new Error(`Gemini returned no text (${cand?.finishReason || data.promptFeedback?.blockReason || 'unknown'})`);
     return text;
   }
