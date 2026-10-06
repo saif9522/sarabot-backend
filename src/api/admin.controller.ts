@@ -55,6 +55,7 @@ class UserPatchDto {
   @IsOptional() @IsBoolean() active?: boolean;
   @IsOptional() @IsString() @MinLength(1) @MaxLength(120) name?: string;
   @IsOptional() @IsString() @MaxLength(20) mobile?: string;
+  @IsOptional() @IsEmail() email?: string;
   @IsOptional() @IsIn(['owner', 'admin', 'agent']) role?: 'owner' | 'admin' | 'agent';
 }
 
@@ -240,8 +241,18 @@ export class AdminController {
   async updateUser(@Param('userId') userId: string, @Body() dto: UserPatchDto) {
     const u = await this.prisma.user.findUnique({ where: { id: userId } });
     if (!u || u.role === 'superadmin') throw new NotFoundException();
-    const data = { ...dto, ...(dto.active === false ? { sessionVersion: { increment: 1 } } : {}) }; // disabling signs them out
-    const updated = await this.prisma.user.update({ where: { id: userId }, data, select: { id: true, active: true, role: true } });
+    const email = dto.email?.trim().toLowerCase();
+    if (email && email !== u.email && (await this.prisma.user.findUnique({ where: { email } }))) {
+      throw new ConflictException('Another user already uses this email');
+    }
+    const data = {
+      ...dto,
+      ...(email ? { email } : {}),
+      ...(dto.name ? { name: dto.name.trim() } : {}),
+      ...(dto.mobile !== undefined ? { mobile: dto.mobile.trim() } : {}),
+      ...(dto.active === false ? { sessionVersion: { increment: 1 } } : {}), // disabling signs them out
+    };
+    const updated = await this.prisma.user.update({ where: { id: userId }, data, select: { id: true, name: true, email: true, mobile: true, active: true, role: true } });
     if (dto.active === false) await this.prisma.contact.updateMany({ where: { assignedToId: userId }, data: { assignedToId: null } });
     return updated;
   }

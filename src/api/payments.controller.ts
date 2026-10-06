@@ -41,7 +41,11 @@ export class PaymentsController {
       select: { id: true, name: true, description: true, chatLimit: true, durationDays: true, price: true, currency: true, numbersLimit: true, agentsLimit: true },
     });
     const ws_ = await this.prisma.workspace.findUniqueOrThrow({ where: { id: ws(u) }, select: { name: true } });
-    return { enabled: !!this.keys(), keyId: this.keys()?.keyId ?? null, plans, prefill: { name: u.name, email: u.email }, business: ws_.name };
+    const cur = await this.subs.current(ws(u));
+    return {
+      enabled: !!this.keys(), keyId: this.keys()?.keyId ?? null, plans, prefill: { name: u.name, email: u.email }, business: ws_.name,
+      current: cur ? { planId: cur.planId, planName: cur.planName, endsAt: cur.endsAt, price: cur.amountPaid } : null,
+    };
   }
 
   @Roles('owner', 'admin')
@@ -79,8 +83,9 @@ export class PaymentsController {
     if (!safeEqual(expected, dto.razorpay_signature)) throw new BadRequestException('Payment could not be verified');
     const p = await this.prisma.payment.findUnique({ where: { razorpayOrderId: dto.razorpay_order_id } });
     if (!p || p.workspaceId !== ws(u)) throw new NotFoundException('Order not found');
-    const sub = await this.markPaid(dto.razorpay_order_id, dto.razorpay_payment_id, 'checkout');
-    return { ok: true, subscription: sub };
+    const subId = await this.markPaid(dto.razorpay_order_id, dto.razorpay_payment_id, 'checkout');
+    const sub = subId ? await this.prisma.subscription.findUnique({ where: { id: subId }, select: { planName: true, startsAt: true, endsAt: true } }) : null;
+    return { ok: true, subscription: subId, planName: sub?.planName ?? null, startsAt: sub?.startsAt ?? null, endsAt: sub?.endsAt ?? null, startsNow: sub ? sub.startsAt.getTime() <= Date.now() : true };
   }
 
   /** Razorpay webhook (events: payment.captured, order.paid, payment.failed). */
@@ -113,13 +118,34 @@ export class PaymentsController {
       if (claimed.count === 0) return p.subscriptionId; // already handled
       const plan = p.planId ? await tx.plan.findUnique({ where: { id: p.planId } }) : null;
       if (!plan) throw new BadRequestException('The plan for this payment no longer exists. Contact support.');
+      // No running plan or a different plan (upgrade/change) -> starts right now and replaces the running one.
+      // Same plan again -> renewal, queued after the running plan so no days are lost.
+      const now = new Date();
+      const running = await tx.subscription.findFirst({
+        where: { workspaceId: p.workspaceId, status: 'active', startsAt: { lte: now }, endsAt: { gt: now } },
+        orderBy: { startsAt: 'desc' },
+      });
+      const start: 'now' | 'after' = running && running.planId === plan.id ? 'after' : 'now';
       const sub = await this.subs.activate(p.workspaceId, plan, {
-        start: 'after', amountPaid: p.amount / 100, note: `Razorpay ${paymentId ?? orderId}`, activatedBy: `razorpay (${via})`,
+        start, amountPaid: p.amount / 100,
+        note: `Razorpay ${paymentId ?? orderId}${start === 'now' && running ? ` (upgraded from ${running.planName})` : ''}`,
+        activatedBy: `razorpay (${via})`,
       }, tx);
       await tx.payment.update({ where: { id: p.id }, data: { subscriptionId: sub.id } });
       this.log.log(`Plan "${plan.name}" activated for workspace ${p.workspaceId} via ${via}`);
       return sub.id;
     });
+  }
+
+  /** Browser reports a failed/closed checkout so the order doesn't stay "created" forever. */
+  @Roles('owner', 'admin')
+  @Post('failed')
+  @HttpCode(200)
+  async failed(@CurrentUser() u: AuthUser, @Body() body: { orderId?: string }) {
+    if (typeof body?.orderId === 'string') {
+      await this.prisma.payment.updateMany({ where: { razorpayOrderId: body.orderId, workspaceId: ws(u), status: 'created' }, data: { status: 'failed' } });
+    }
+    return { ok: true };
   }
 
   @Roles('owner', 'admin')
