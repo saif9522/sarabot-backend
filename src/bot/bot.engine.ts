@@ -45,8 +45,11 @@ export class BotEngine {
   async decide(bot: BotWithFlows, latest: string, unanswered: string, history: HistoryItem[], contact: { name?: string | null; waId: string }): Promise<Decision> {
     const vars = { name: contact.name, number: contact.waId };
     const triggers = bot.flows.filter((f) => !f.isNoMatch && f.enabled && f.keywords.trim());
-    // Each unanswered message on its own (newest first), then all of them together.
-    const candidates = [...new Set([latest, ...unanswered.split('\n').reverse(), unanswered])].filter((t) => t.trim());
+    // The newest message decides. Older unanswered messages are only looked at when the newest one
+    // says nothing by itself ("ok", "?", an emoji). An earlier "hello" must never hide a real question
+    // like "where is your shop?" behind the greeting flow.
+    const older = unanswered.split('\n').reverse().filter((t) => t.trim() && t !== latest && !isGreeting(t));
+    const candidates = noiseReason(latest) ? [latest, ...older] : [latest];
     let flow: (typeof triggers)[number] | undefined;
     for (const text of candidates) if ((flow = findRule(triggers, text))) break;
     if (flow) return { messages: this.flowMessages(flow, vars), via: 'flow', flowName: flow.name, handoff: false };

@@ -316,3 +316,13 @@ model LoginCode {
 
   @@index([userId, createdAt])
 }
+
+/// Uploaded flow images and documents. Kept in the database because the server's disk is wiped on
+/// every deploy/restart (Render free plan). The disk copy is only a cache.
+model MediaFile {
+  name      String   @id
+  mime      String
+  size      Int
+  data      Bytes
+  createdAt DateTime @default(now())
+}

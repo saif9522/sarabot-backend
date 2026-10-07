@@ -4,6 +4,8 @@ import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from './app.module';
 import { UPLOAD_DIR } from './media';
+import { ensureLocalMedia } from './media-store';
+import { PrismaService } from './prisma.service';
 
 async function bootstrap() {
   // rawBody: needed to verify Razorpay webhook signatures
@@ -25,6 +27,11 @@ async function bootstrap() {
     next();
   });
   // Uploaded flow images/documents, e.g. http://localhost:4100/uploads/123.jpg
+  // If a restart wiped the disk copy, put it back from the database before serving it.
+  const prisma = app.get(PrismaService);
+  app.use('/uploads', (req: any, _res: any, next: () => void) => {
+    ensureLocalMedia(prisma, req.path).catch(() => null).finally(() => next());
+  });
   app.useStaticAssets(UPLOAD_DIR, { prefix: '/uploads/', index: false, dotfiles: 'deny' });
   app.setGlobalPrefix('api');
   app.enableCors({ origin: process.env.FRONTEND_URL || 'http://localhost:3100', credentials: true });

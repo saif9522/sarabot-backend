@@ -136,7 +136,17 @@ export class InboundService implements OnModuleInit {
         }
         const sentBy = decision.via === 'none' ? 'fallback' : decision.via;
         for (const m of decision.messages) {
-          if (await this.send(account.id, contact.id, contact.waId, m, sentBy)) sentAny = true;
+          try {
+            if (await this.send(account.id, contact.id, contact.waId, m, sentBy)) sentAny = true;
+          } catch (e) {
+            const msg = (e as Error).message || '';
+            if (/not connected/i.test(msg)) throw e; // the number is down: nothing else will go out either
+            this.log.warn(`Skipped one ${m.type} step for ${contact.waId}: ${msg}`);
+            // An image/document that can't be sent: still deliver its caption so the customer gets the words.
+            if ((m.type === 'image' || m.type === 'document') && m.caption?.trim()) {
+              if (await this.send(account.id, contact.id, contact.waId, m.caption, sentBy).catch(() => null)) sentAny = true;
+            }
+          }
         }
       } catch (e) {
         if (!sentAny) await this.subs.refund(wsId); // nothing reached the customer: give the chat back

@@ -10,6 +10,7 @@ import { PrismaService } from '../prisma.service';
 import { RealtimeGateway } from '../realtime.gateway';
 import { MIME_BY_EXT, localMediaPath, writableDir } from '../media';
 import { clearDbAuth, importFileAuth, linkedAccountIds, useDbAuthState } from './db-auth-state';
+import { ensureLocalMedia } from '../media-store';
 
 export type SessionStatus = 'disconnected' | 'starting' | 'qr' | 'connected';
 export interface SessionState { status: SessionStatus; qr: string | null; lastError: string | null }
@@ -294,8 +295,14 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
   async sendMedia(accountId: string, to: string, m: { type: 'image' | 'document'; media: string; caption?: string; fileName?: string }) {
     const s = this.sessions.get(accountId);
     if (!s?.sock || s.state.status !== 'connected') throw new Error('This number is not connected');
-    const local = localMediaPath(m.media);
-    const source = local ? await fs.readFile(local) : { url: m.media };
+    let source: Buffer | { url: string };
+    if (localMediaPath(m.media)) {
+      const local = await ensureLocalMedia(this.prisma, m.media); // restores from the database after a restart
+      if (!local) throw new Error(`MEDIA_MISSING: ${path.basename(m.media)} no longer exists. Upload it again in the bot flow.`);
+      source = await fs.readFile(local);
+    } else {
+      source = { url: m.media };
+    }
     const jid = toJid(to);
     await sleep(MEDIA_DELAY_MS);
     const res =
