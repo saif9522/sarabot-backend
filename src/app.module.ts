@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { HealthController } from './api/health.controller';
 import { ConfigModule } from '@nestjs/config';
 import { PrismaModule } from './prisma.service';
 import { RealtimeModule } from './realtime.gateway';
@@ -26,7 +27,7 @@ import { BillingController } from './api/billing.controller';
 
 @Module({
   imports: [ConfigModule.forRoot({ isGlobal: true }), PrismaModule, SettingsModule, RealtimeModule, LlmModule, SubscriptionModule, BootstrapModule, MailerModule, BotModule, SessionModule, InboundModule],
-  controllers: [AuthController, AdminController, PaymentsController, AgentsController, BillingController, AccountsController, BotsController, ChatsController, ProductsController, DashboardController, UploadsController],
+  controllers: [HealthController, AuthController, AdminController, PaymentsController, AgentsController, BillingController, AccountsController, BotsController, ChatsController, ProductsController, DashboardController, UploadsController],
   providers: [{ provide: APP_GUARD, useClass: AuthGuard }],
 })
 export class AppModule {}

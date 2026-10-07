@@ -1,14 +1,15 @@
 import { Global, Injectable, Logger, Module, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import makeWASocket, {
-  Browsers, DisconnectReason, WASocket, fetchLatestBaileysVersion, normalizeMessageContent, useMultiFileAuthState,
+  Browsers, DisconnectReason, WASocket, fetchLatestBaileysVersion, normalizeMessageContent, 
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
-import { existsSync, promises as fs } from 'fs';
+import { promises as fs } from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma.service';
 import { RealtimeGateway } from '../realtime.gateway';
 import { MIME_BY_EXT, localMediaPath, writableDir } from '../media';
+import { clearDbAuth, importFileAuth, linkedAccountIds, useDbAuthState } from './db-auth-state';
 
 export type SessionStatus = 'disconnected' | 'starting' | 'qr' | 'connected';
 export interface SessionState { status: SessionStatus; qr: string | null; lastError: string | null }
@@ -73,16 +74,53 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     return path.join(ROOT, accountId.replace(/[^\w-]/g, ''));
   }
 
+  private watchdog?: NodeJS.Timeout;
+  private keepAlive?: NodeJS.Timeout;
+
   async onApplicationBootstrap() {
-    const accounts = await this.prisma.account.findMany();
+    const accounts = await this.prisma.account.findMany({ select: { id: true } });
     for (const a of accounts) {
-      if (existsSync(path.join(this.dir(a.id), 'creds.json'))) {
-        this.start(a.id).catch((e) => this.log.error(`${a.label}: auto-connect failed: ${e.message}`));
+      try { await importFileAuth(this.prisma, a.id, this.dir(a.id)); } catch { /* no old files */ }
+    }
+    for (const id of await linkedAccountIds(this.prisma)) {
+      this.start(id).catch((e) => this.log.error(`${id}: auto-connect failed: ${e.message}`));
+    }
+    // Every minute: any number that is linked but not connected gets reconnected.
+    // A number is only left alone after Unlink (or logout from the phone), which deletes its login.
+    this.watchdog = setInterval(() => this.reviveAll().catch((e) => this.log.error(`Watchdog: ${e.message}`)), 60_000);
+    this.startKeepAlive();
+  }
+
+  private async reviveAll() {
+    for (const accountId of await linkedAccountIds(this.prisma)) {
+      const s = this.sessions.get(accountId);
+      const down = !s || (!s.sock && s.state.status !== 'qr') || s.state.status === 'disconnected';
+      if (down && !this.opening.has(accountId)) {
+        this.log.log(`Watchdog: reconnecting ${accountId}`);
+        if (s) s.state.status = 'disconnected';
+        this.start(accountId).catch((e) => this.log.error(`Watchdog ${accountId}: ${e.message}`));
       }
     }
   }
 
+  /**
+   * Render's free plan sleeps after 15 minutes without web traffic, which drops WhatsApp.
+   * When running on Render, ping our own public URL every 10 minutes so it stays awake.
+   * Turn off with KEEP_ALIVE=false (not needed on a paid plan).
+   */
+  private startKeepAlive() {
+    const base = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+    if (!base || process.env.KEEP_ALIVE === 'false') return;
+    const url = `${base}/api/health`;
+    this.log.log(`Keep-alive: pinging ${url} every 10 minutes`);
+    this.keepAlive = setInterval(() => {
+      fetch(url, { signal: AbortSignal.timeout(20_000) }).catch(() => undefined);
+    }, 10 * 60_000);
+  }
+
   async onModuleDestroy() {
+    if (this.watchdog) clearInterval(this.watchdog);
+    if (this.keepAlive) clearInterval(this.keepAlive);
     for (const s of this.sessions.values()) {
       s.stopping = true;
       s.sock?.end(undefined);
@@ -136,8 +174,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
   }
 
   private async open(accountId: string) {
-    await fs.mkdir(this.dir(accountId), { recursive: true });
-    const { state, saveCreds } = await useMultiFileAuthState(this.dir(accountId));
+    const { state, saveCreds } = await useDbAuthState(this.prisma, accountId);
     let version: [number, number, number] | undefined;
     try {
       version = (await fetchLatestBaileysVersion()).version;
@@ -187,28 +224,30 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
         const linked = !!state.creds?.registered;
         const tries = (this.retries.get(accountId) ?? 0) + 1;
         if (code === DisconnectReason.loggedOut) {
-          await fs.rm(this.dir(accountId), { recursive: true, force: true });
+          await clearDbAuth(this.prisma, accountId);
+          await fs.rm(this.dir(accountId), { recursive: true, force: true }).catch(() => undefined);
           this.update(accountId, { status: 'disconnected', qr: null, lastError: 'Logged out from the phone. Link it again with a new QR code.' }, session);
         } else if (session.stopping) {
           this.update(accountId, { status: 'disconnected', qr: null }, session);
         } else if (waitingForScan && code !== DisconnectReason.restartRequired) {
           this.update(accountId, { status: 'disconnected', qr: null, lastError: 'The QR code expired. Click Link to get a new one.' }, session);
-        } else if (tries > MAX_RETRIES) {
+        } else if (tries > MAX_RETRIES && !linked) {
           this.retries.delete(accountId);
           // A half-finished link (never scanned) can leave bad keys behind; start clean next time.
-          if (!linked) await fs.rm(this.dir(accountId), { recursive: true, force: true }).catch(() => undefined);
+          await clearDbAuth(this.prisma, accountId).catch(() => undefined);
           this.update(accountId, {
             status: 'disconnected', qr: null,
             lastError: `WhatsApp closed the connection (code ${code ?? 'unknown'}). Click Link to try again.`,
           }, session);
         } else {
+          // Linked numbers keep retrying forever: 3 s, 6 s, 9 s … up to every 5 minutes.
           this.retries.set(accountId, tries);
-          this.update(accountId, { status: 'starting' }, session);
+          this.update(accountId, { status: 'starting', lastError: tries > 2 ? `Reconnecting to WhatsApp (attempt ${tries})…` : null }, session);
           setTimeout(() => {
             if (this.sessions.get(accountId) !== session) return; // something else already reconnected
             session.state.status = 'disconnected'; // let start() run again
             this.start(accountId).catch((e) => this.log.error(e.message));
-          }, 3000 * tries);
+          }, Math.min(3000 * tries, 5 * 60_000));
         }
       }
     });
@@ -287,7 +326,8 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
       }
       s.sock = undefined;
     }
-    await fs.rm(this.dir(accountId), { recursive: true, force: true });
+    await clearDbAuth(this.prisma, accountId);
+    await fs.rm(this.dir(accountId), { recursive: true, force: true }).catch(() => undefined);
     this.sessions.set(accountId, { sock: undefined, stopping: true, state: { status: 'disconnected', qr: null, lastError: null } });
     this.rt.toWorkspace(this.owners.get(accountId), 'account', { id: accountId, status: 'disconnected', qr: null, lastError: null });
   }

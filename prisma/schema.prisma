@@ -116,6 +116,20 @@ model Account {
   timezone      String    @default("Asia/Kolkata")
   createdAt     DateTime  @default(now())
   contacts      Contact[]
+  waAuth        WaAuth[]
+}
+
+/// WhatsApp linked-device login, stored encrypted in the database so it survives restarts and deploys.
+/// key = "creds" or "<signal key type>-<id>". value = AES-256-GCM encrypted JSON.
+model WaAuth {
+  accountId String
+  account   Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  key       String
+  value     String   @db.Text
+  updatedAt DateTime @updatedAt
+
+  @@id([accountId, key])
+  @@index([accountId])
 }
 
 model Bot {
