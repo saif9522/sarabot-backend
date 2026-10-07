@@ -5,7 +5,9 @@ import { MIME_BY_EXT, UPLOAD_DIR, localMediaPath } from './media';
 
 /** Saves an upload in the database (permanent) and on disk (fast cache). */
 export async function saveMedia(prisma: PrismaService, name: string, mime: string, data: Buffer) {
-  await prisma.mediaFile.upsert({ where: { name }, create: { name, mime, size: data.length, data }, update: { mime, size: data.length, data } });
+  // Prisma's Bytes type wants a Uint8Array backed by a plain ArrayBuffer; a Node Buffer may not be. Copy it.
+  const bytes = new Uint8Array(data);
+  await prisma.mediaFile.upsert({ where: { name }, create: { name, mime, size: bytes.length, data: bytes }, update: { mime, size: bytes.length, data: bytes } });
   await fs.mkdir(UPLOAD_DIR, { recursive: true }).catch(() => undefined);
   await fs.writeFile(path.join(UPLOAD_DIR, name), data).catch(() => undefined);
 }
