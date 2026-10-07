@@ -174,7 +174,7 @@ export class InboundService implements OnModuleInit {
       return null;
     }
     const externalId = msg.type === 'text'
-      ? await this.sessions.sendText(accountId, waId, msg.text)
+      ? await this.sessions.sendText(accountId, waId, msg.text, { typing: sentBy !== 'human' }) // a person's reply goes out instantly
       : await this.sessions.sendMedia(accountId, waId, msg);
     const saved = await this.prisma.message.create({
       data: {

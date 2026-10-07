@@ -236,14 +236,18 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     return session.state;
   }
 
-  async sendText(accountId: string, to: string, text: string): Promise<string | undefined> {
+  /** `typing: false` sends at once (replies typed by a person in the dashboard); bot replies show "typing…" first. */
+  async sendText(accountId: string, to: string, text: string, opts: { typing?: boolean } = {}): Promise<string | undefined> {
     const s = this.sessions.get(accountId);
     if (!s?.sock || s.state.status !== 'connected') throw new Error('This number is not connected');
     const jid = toJid(to);
-    await s.sock.sendPresenceUpdate('composing', jid).catch(() => undefined);
-    await sleep(Math.min(TYPING_MAX_MS, TYPING_MIN_MS + text.length * TYPING_MS_PER_CHAR));
+    const typing = opts.typing !== false && TYPING_MAX_MS > 0;
+    if (typing) {
+      await s.sock.sendPresenceUpdate('composing', jid).catch(() => undefined);
+      await sleep(Math.min(TYPING_MAX_MS, TYPING_MIN_MS + text.length * TYPING_MS_PER_CHAR));
+    }
     const res = await s.sock.sendMessage(jid, { text });
-    await s.sock.sendPresenceUpdate('paused', jid).catch(() => undefined);
+    if (typing) await s.sock.sendPresenceUpdate('paused', jid).catch(() => undefined);
     return res?.key?.id ?? undefined;
   }
 
