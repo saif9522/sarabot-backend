@@ -4,6 +4,9 @@ import { PrismaService } from '../prisma.service';
 
 /** Settings the Super Admin can change from the dashboard. Each falls back to the .env value. */
 export const SETTING_KEYS = {
+  OPENAI_API_KEY: { secret: true, label: 'OpenAI (ChatGPT) API key' },
+  OPENAI_MODEL: { secret: false, label: 'OpenAI model' },
+  OPENAI_FALLBACK_MODEL: { secret: false, label: 'Backup OpenAI model' },
   GEMINI_API_KEY: { secret: true, label: 'Gemini API key' },
   LLM_MODEL: { secret: false, label: 'AI model' },
   LLM_FALLBACK_MODEL: { secret: false, label: 'Backup AI models (comma separated)' },

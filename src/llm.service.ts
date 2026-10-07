@@ -1,21 +1,29 @@
 import { Global, Injectable, Logger, Module } from '@nestjs/common';
 import { SettingsService } from './settings/settings.service';
 
-type Provider = 'gemini' | 'anthropic' | null;
+type Provider = 'openai' | 'gemini' | 'anthropic' | null;
 
 /**
- * AI client. Uses Google Gemini when GEMINI_API_KEY is set, otherwise Anthropic when
- * ANTHROPIC_API_KEY is set. Without either, bots use flows and the fallback message only.
+ * AI client. Order of preference: OpenAI (OPENAI_API_KEY), Google Gemini (GEMINI_API_KEY), Anthropic (ANTHROPIC_API_KEY).
+ * If the main provider fails and another one has a key, that one answers instead.
+ * Without any key, bots use flows and the fallback message only.
  */
 @Injectable()
 export class LlmService {
   private readonly log = new Logger('AI');
   constructor(private settings: SettingsService) {}
 
+  /** Every provider that has a key, best first. */
+  private get providers(): Exclude<Provider, null>[] {
+    const list: Exclude<Provider, null>[] = [];
+    if (this.settings.get('OPENAI_API_KEY')) list.push('openai');
+    if (this.settings.get('GEMINI_API_KEY')) list.push('gemini');
+    if (process.env.ANTHROPIC_API_KEY) list.push('anthropic');
+    return list;
+  }
+
   get provider(): Provider {
-    if (this.settings.get('GEMINI_API_KEY')) return 'gemini';
-    if (process.env.ANTHROPIC_API_KEY) return 'anthropic';
-    return null;
+    return this.providers[0] ?? null;
   }
 
   get enabled() {
@@ -23,7 +31,19 @@ export class LlmService {
   }
 
   async json<T>(system: string, prompt: string, maxTokens = 1024): Promise<T> {
-    const text = this.provider === 'gemini' ? await this.gemini(system, prompt, maxTokens) : await this.anthropic(system, prompt, maxTokens);
+    let text = '';
+    let lastErr: Error | null = null;
+    for (const p of this.providers) {
+      try {
+        text = p === 'openai' ? await this.openai(system, prompt, maxTokens) : p === 'gemini' ? await this.gemini(system, prompt, maxTokens) : await this.anthropic(system, prompt, maxTokens);
+        if (lastErr) this.log.log(`Answered by ${p} after the main AI failed`);
+        break;
+      } catch (e) {
+        lastErr = e as Error;
+        this.log.warn(`${p} failed: ${lastErr.message}`);
+      }
+    }
+    if (!text) throw lastErr ?? new Error('No AI provider is set up');
     const clean = text.replace(/```json|```/g, '').trim();
     const start = clean.indexOf('{');
     const end = clean.lastIndexOf('}');
@@ -38,6 +58,75 @@ export class LlmService {
   private compat = new Map<string, number>();
   /** Models that answered 404 / unusable 400, skipped for a while. */
   private skipUntil = new Map<string, number>();
+
+  /**
+   * How much each OpenAI model accepts, learnt at runtime:
+   * 0 = JSON mode + minimal reasoning, 1 = JSON mode only, 2 = plain request (JSON parsed from the text).
+   */
+  private openaiCompat = new Map<string, number>();
+
+  /** OpenAI Chat Completions with JSON output. Retries busy/rate-limit errors once, then a backup model if set. */
+  private async openai(system: string, prompt: string, maxTokens: number): Promise<string> {
+    const main = this.settings.get('OPENAI_MODEL', 'gpt-5-mini').trim();
+    const backup = (this.settings.get('OPENAI_FALLBACK_MODEL') || '').trim();
+    const models = [main, ...(backup && backup !== main ? [backup] : [])];
+    const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    let lastError = 'OpenAI request failed';
+    for (const model of models) {
+      let level = this.openaiCompat.get(model) ?? 0;
+      for (let attempt = 1; attempt <= 2 && level <= 2; ) {
+        let res: Response;
+        try {
+          res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { authorization: `Bearer ${this.settings.get('OPENAI_API_KEY')}`, 'content-type': 'application/json' },
+            signal: AbortSignal.timeout(20_000),
+            body: JSON.stringify({
+              model,
+              messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
+              // Reasoning models also spend tokens "thinking": leave room for that.
+              max_completion_tokens: maxTokens + 1500,
+              ...(level < 2 ? { response_format: { type: 'json_object' } } : {}),
+              ...(level === 0 ? { reasoning_effort: 'minimal' } : {}),
+            }),
+          });
+        } catch (e) {
+          lastError = `OpenAI did not answer in time (${(e as Error).name})`;
+          this.log.warn(`${lastError}, model ${model}, try ${attempt}`);
+          attempt++;
+          continue;
+        }
+        if (res.ok) {
+          const data: any = await res.json();
+          const text = data.choices?.[0]?.message?.content || '';
+          if (!text) { lastError = `OpenAI returned no text (${data.choices?.[0]?.finish_reason || 'unknown'})`; attempt++; continue; }
+          this.openaiCompat.set(model, level);
+          return text;
+        }
+        const body = (await res.text()).slice(0, 300).replace(/\s+/g, ' ');
+        if (res.status === 400 && level < 2) {
+          // e.g. a model that doesn't take reasoning_effort or JSON mode: try simpler settings
+          this.log.warn(`OpenAI 400 (model ${model}) with settings level ${level}, retrying simpler: ${body.slice(0, 120)}`);
+          level++;
+          continue;
+        }
+        if (res.status === 429 || res.status >= 500) {
+          lastError = /insufficient_quota|billing/i.test(body) ? 'OpenAI account has no credit left — add credit at platform.openai.com' : `OpenAI is busy (${res.status})`;
+          this.log.warn(`OpenAI ${res.status} (model ${model}), try ${attempt}: ${body.slice(0, 120)}`);
+          if (/insufficient_quota|billing/i.test(body)) break;
+          if (attempt === 1) await sleep(1500);
+          attempt++;
+          continue;
+        }
+        this.log.error(`OpenAI ${res.status} (model ${model}): ${body}`);
+        lastError = res.status === 401 ? 'OpenAI rejected the API key — check OPENAI_API_KEY'
+          : res.status === 404 ? `OpenAI model "${model}" is not available — set OPENAI_MODEL to a current model`
+          : `OpenAI request failed (${res.status})`;
+        break;
+      }
+    }
+    throw new Error(lastError);
+  }
 
   /** One request to one Gemini model. */
   private geminiCall(model: string, system: string, prompt: string, maxTokens: number, level: number) {
