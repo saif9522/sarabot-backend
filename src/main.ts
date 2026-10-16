@@ -39,6 +39,10 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const port = Number(process.env.PORT || 4100);
   await app.listen(port);
+<<<<<<< HEAD
   console.log(`SAS Chatbot API on http://localhost:${port}/api`);
+=======
+  console.log(`Sarabot API on http://localhost:${port}/api`);
+>>>>>>> 914e0a67b9370205512a6e8a4f555bddadf7a7f8
 }
 bootstrap();

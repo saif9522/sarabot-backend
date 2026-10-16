@@ -1,5 +1,9 @@
 {
+<<<<<<< HEAD
   "name": "sas-chatbot-backend",
+=======
+  "name": "saif-chat-backend",
+>>>>>>> 914e0a67b9370205512a6e8a4f555bddadf7a7f8
   "version": "0.1.0",
   "private": true,
   "scripts": {

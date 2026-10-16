@@ -185,7 +185,11 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     const sock = makeWASocket({
       auth: state,
       ...(version ? { version } : {}),
+<<<<<<< HEAD
       browser: Browsers.windows('SAS Chatbot'),
+=======
+      browser: Browsers.windows('Sarabot'),
+>>>>>>> 914e0a67b9370205512a6e8a4f555bddadf7a7f8
       logger: pino({ level: 'silent' }) as any,
       markOnlineOnConnect: false,
       syncFullHistory: false,

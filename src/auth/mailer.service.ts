@@ -13,8 +13,12 @@ import * as nodemailer from 'nodemailer';
 @Injectable()
 export class MailerService {
   private readonly log = new Logger('Email');
+<<<<<<< HEAD
   // SMTP is used only once a password is set, so a half-filled demo config still falls back to the logs.
   private transport = process.env.SMTP_HOST && !(process.env.SMTP_USER && !process.env.SMTP_PASS)
+=======
+  private transport = process.env.SMTP_HOST
+>>>>>>> 914e0a67b9370205512a6e8a4f555bddadf7a7f8
     ? nodemailer.createTransport({
         host: process.env.SMTP_HOST,
         port: Number(process.env.SMTP_PORT || 587),
@@ -37,7 +41,11 @@ export class MailerService {
 
   private sender() {
     const email = process.env.MAIL_FROM_EMAIL || process.env.SMTP_USER || '';
+<<<<<<< HEAD
     const name = process.env.MAIL_FROM_NAME || 'SAS Chatbot';
+=======
+    const name = process.env.MAIL_FROM_NAME || 'Sarabot';
+>>>>>>> 914e0a67b9370205512a6e8a4f555bddadf7a7f8
     // SMTP_FROM may already be "Name <email>"
     const m = /^(.*)<([^>]+)>\s*$/.exec(process.env.SMTP_FROM || '');
     return m && !process.env.MAIL_FROM_EMAIL ? { name: m[1].trim() || name, email: m[2].trim() } : { name, email };
