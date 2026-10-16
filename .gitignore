@@ -1,0 +1,8 @@
+node_modules
+dist
+.env
+wa-sessions
+prisma/*.db
+prisma/*.db-journal
+uploads
+migration-backup
