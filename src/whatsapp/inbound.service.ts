@@ -30,7 +30,6 @@ export class InboundService implements OnModuleInit {
 
   constructor(private prisma: PrismaService, private sessions: SessionManager, private engine: BotEngine, private rt: RealtimeGateway, private subs: SubscriptionService) {}
 
-  private noPlanLogged = new Map<string, number>();
 
   onModuleInit() {
     this.sessions.onMessage((m) => this.receive(m));
@@ -90,17 +89,22 @@ export class InboundService implements OnModuleInit {
         this.handledUpTo.set(contactId, lastIn.createdAt.getTime());
         return;
       }
-      if (contact.optedOut || !account.botEnabled || contact.botPaused) return;
+      // Every silent exit says why in the log ("No reply to +91…: …"), so a missing reply is easy to explain.
+      const silent = (why: string) => this.log.log(`No reply to +${contact.waId}: ${why}`);
+      if (contact.optedOut) return silent('customer sent STOP (unsubscribed) — they can send START');
+      if (!account.botEnabled) return silent('bot is switched off for this number (Numbers page)');
+      if (contact.botPaused) return silent('bot is paused for this chat because a person replied from the dashboard — turn "Bot" back on in Chats');
       const wsId = account.workspaceId;
-      if (!wsId) return;
+      if (!wsId) return silent('number has no workspace');
 
-      const bot = isWorkingHours(account) ? account.workingBot : account.offHoursBot;
-      if (!bot) return;
+      const working = isWorkingHours(account);
+      const bot = working ? account.workingBot : account.offHoursBot;
+      if (!bot) return silent(`no ${working ? 'working-hours' : 'after-hours'} bot chosen for this number (Numbers page)`);
 
       const since = new Date(Date.now() - 3600_000);
       const recent = await this.prisma.message.count({ where: { contactId, direction: 'out', sentBy: { not: 'human' }, createdAt: { gte: since } } });
       if (recent >= MAX_PER_HOUR) {
-        this.log.warn(`Hourly limit reached for +${contact.waId}; waiting for a human`);
+        this.log.warn(`No reply to +${contact.waId}: hourly limit of ${MAX_PER_HOUR} bot replies reached (MAX_BOT_REPLIES_PER_HOUR); waiting for a human`);
         await this.flagHuman(contact.id, account.id);
         return;
       }
@@ -138,6 +142,7 @@ export class InboundService implements OnModuleInit {
         const lastBot = [...history].reverse().find((h) => h.direction === 'out' && h.sentBy !== 'human');
         const recentlySent = lastBot && ['fallback', 'nomatch'].includes(lastBot.sentBy) && Date.now() - lastBot.createdAt.getTime() < FALLBACK_COOLDOWN_MS;
         if (recentlySent) {
+          silent(`${decision.reason || 'no answer'} — fallback message was already sent in the last ${Math.round(FALLBACK_COOLDOWN_MS / 60000)} min (FALLBACK_COOLDOWN_MINUTES)`);
           await this.flagHuman(contact.id, account.id);
           return;
         }
@@ -146,16 +151,13 @@ export class InboundService implements OnModuleInit {
       }
 
       if (!decision.messages.length && !welcome) {
+        silent(decision.reason || 'nothing to send');
         if (decision.handoff) await this.flagHuman(contact.id, account.id);
         return;
       }
       // One automatic reply = one chat from the customer's plan.
       if (!(await this.subs.consume(wsId))) {
-        const last = this.noPlanLogged.get(wsId) ?? 0;
-        if (Date.now() - last > 3600_000) {
-          this.noPlanLogged.set(wsId, Date.now());
-          this.log.warn(`Workspace ${wsId}: no active plan or chats used up — not replying automatically`);
-        }
+        this.log.warn(`No reply to +${contact.waId}: no active plan, plan expired or all chats used up (workspace ${wsId}) — add chats or activate a plan`);
         await this.flagHuman(contact.id, account.id);
         return;
       }

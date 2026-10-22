@@ -73,3 +73,10 @@ Shown as "Training data" in chats and in the Test tab.
 - After deploying: Numbers → Unlink, then Link again with a fresh QR once, to start with clean encryption sessions.
 - Faster feel: "typing…" shows the moment a message arrives, while the AI thinks; the reply then goes out
   without an extra typing pause. Wait for follow-up messages: 1.5 s.
+
+## 7. Clear logs for every "no reply" (22 Oct, update 4)
+
+- Every time the bot stays silent the log says why: `No reply to +91…: <reason>` (bot off, chat paused by a person,
+  plan used up, hourly limit, fallback already sent, AI said nothing …).
+- `/api/health` now shows `build` (which code is running) and `ai` (which AI provider has a key).
+- OpenAI: models without "reasoning" (gpt-4o-mini, gpt-4.1-mini) skip the reasoning setting → first reply faster.

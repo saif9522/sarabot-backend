@@ -7,6 +7,7 @@ import { UPLOAD_DIR } from './media';
 import { ensureLocalMedia } from './media-store';
 import { PrismaService } from './prisma.service';
 import { appSecret } from './auth/crypto';
+import { BUILD } from './version';
 
 async function bootstrap() {
   appSecret(); // stops here with a clear message if SESSION_SECRET is missing on a real server
@@ -41,6 +42,6 @@ async function bootstrap() {
   app.enableShutdownHooks();
   const port = Number(process.env.PORT || 4100);
   await app.listen(port);
-  console.log(`SAS Chatbot API on http://localhost:${port}/api`);
+  console.log(`SAS Chatbot API on http://localhost:${port}/api — build ${BUILD}`);
 }
 bootstrap();
