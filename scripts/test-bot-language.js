@@ -68,7 +68,7 @@ const engine = new BotEngine(prisma, llm);
 const bot = {
   id: 'b', workspaceId: 'w', name: 'Test', aiEnabled: true, instructions: '', companyName: 'Sharma Mobile', location: 'Main Road, Ranchi',
   industry: '', assistantName: '', primaryGoal: '', supportEmail: '', websiteUrl: '', phoneNumbers: '9876543210', knowledge,
-  welcomeMessage: '', fallbackMessage: L.DEFAULT_FALLBACK_EN, language: 'auto', welcomeMessageHi: '', fallbackMessageHi: '', useProducts: true,
+  welcomeMessage: '', fallbackMessage: L.DEFAULT_FALLBACK_EN, language: 'auto', welcomeMessageHi: '', fallbackMessageHi: '', useProducts: true, alwaysReply: true,
   flows: [{ id: 'f', name: 'Menu', keywords: 'menu', matchType: 'exact', isNoMatch: false, enabled: true, priority: 0, steps: [{ position: 0, type: 'text', text: 'Menu: 1) Phones 2) Accessories' }] }],
 };
 const contact = { name: 'Ravi Kumar', waId: '919999999999' };
@@ -90,5 +90,27 @@ const run = async (msg, hist = []) => {
   eq('address answered', (await run('dukan kahan hai?')).via, 'faq');
   eq('fallback hinglish', (await run('mera order abhi tak nahi aaya, bahut late ho gaya')).text, L.say('fallback', 'hinglish'));
   console.log(fail ? `\n${fail} FAILED` : '\nALL PASSED');
-  process.exit(fail ? 1 : 0);
+  if (fail) process.exitCode = 1;
+})();
+
+// ---- "Answer everything" (ChatGPT-style) mode, with a fake AI
+(async () => {
+  await new Promise((r) => setTimeout(r, 300));
+  let lastSystem = '';
+  const fakeLlm = { enabled: true, json: async (system, prompt) => { lastSystem = system; return { relevant: true, reply: 'AI: ' + prompt.split("latest message(s): ")[1].split('\n')[0], handoff: false }; } };
+  const e2 = new BotEngine({ product: { findMany: async () => [] } }, fakeLlm);
+  const chatBot = { id: 'b2', workspaceId: 'w', name: 'T', aiEnabled: true, instructions: '', companyName: 'Demo', location: '', industry: '', assistantName: '', primaryGoal: '', supportEmail: '', websiteUrl: '', phoneNumbers: '', knowledge: '', welcomeMessage: '', fallbackMessage: 'Thanks!', language: 'auto', welcomeMessageHi: '', fallbackMessageHi: '', useProducts: false, alwaysReply: true, flows: [] };
+  const ask = async (b, m) => e2.decide(b, m, m, [{ direction: 'in', body: m }], { name: 'Saif', waId: '91' });
+  let fails = 0;
+  const check = (n, c) => { console.log(`${c ? 'PASS' : 'FAIL'}  ${n}`); if (!c) fails++; };
+  check('chat mode answers off-topic', (await ask(chatBot, 'Hindi me bat kar sakte ho')).via === 'ai');
+  check('chat mode prompt says reply to every message', lastSystem.includes('reply to EVERY message'));
+  check('chat mode answers thanks', (await ask(chatBot, 'thank you')).via === 'ai');
+  check('chat mode ignores emoji', (await ask(chatBot, '👍')).via === 'ignored');
+  const strict = { ...chatBot, alwaysReply: false };
+  check('business-only mode ignores thanks', (await ask(strict, 'thank you')).via === 'ignored');
+  await ask(strict, 'what is AI?');
+  check('business-only prompt keeps silence rule', lastSystem.includes('Staying silent is better'));
+  console.log(fails ? `CHAT MODE: ${fails} FAILED` : 'CHAT MODE: ALL PASSED');
+  if (fails) process.exitCode = 1;
 })();

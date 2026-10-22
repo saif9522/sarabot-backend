@@ -78,8 +78,10 @@ export class BotEngine {
     }
 
     // Nothing to answer: "ok", "thanks", emojis, single letters, abuse.
+    // In "answer everything" mode with AI, a "thanks" still gets a short friendly reply, like ChatGPT would.
+    const chatMode = bot.alwaysReply && bot.aiEnabled && this.llm.enabled;
     const noise = noiseReason(latest);
-    if (noise) {
+    if (noise && !(chatMode && noise === 'acknowledgement')) {
       const reasons = { empty: 'Too short or emoji only', acknowledgement: 'Just an acknowledgement', abusive: 'Abusive message' } as const;
       return { messages: [], via: 'ignored', handoff: false, reason: reasons[noise], lang };
     }
@@ -145,7 +147,8 @@ export class BotEngine {
       ? `- ALWAYS reply in ${LANG_LABEL[lang]}, whatever language the customer uses.\n`
       : `- Reply in the customer's language and script. Right now that is ${LANG_LABEL[lang]}. ` +
         'Hindi in Devanagari → reply in Devanagari; Hindi typed in English letters → reply in Hinglish (English letters); English → English. ' +
-        'If the customer switches language, switch with them. Keep product names, prices and numbers as they are.\n';
+        'If the customer switches language, switch with them. If they ASK for a language ("Hindi me baat karo", "talk in English"), ' +
+        'use that language from then on — check the conversation for such a request. Keep product names, prices and numbers as they are.\n';
     let catalogue = '';
     if (bot.useProducts) {
       const products = await this.prisma.product.findMany({ where: { workspaceId: bot.workspaceId }, include: { category: true }, orderBy: { name: 'asc' }, take: 2000 });
@@ -161,18 +164,30 @@ export class BotEngine {
     const transcript = history.slice(-16).map((h) => `${h.direction === 'in' ? 'Customer' : 'Business'}: ${h.body}`).join('\n');
     const info = this.businessInfo(bot);
 
-    const out = await this.llm.json<{ relevant?: boolean; reply: string; handoff: boolean; reason?: string }>(
-      `You are ${bot.assistantName || 'the WhatsApp assistant'}${bot.companyName ? ` for ${bot.companyName}` : ''}, answering customers on WhatsApp.\n` +
-        'Rules:\n' +
-        languageRule +
-        '- Short and friendly: 1–4 sentences, plain text, at most a few emojis.\n' +
+    const chatMode = bot.alwaysReply;
+    const scopeRules = chatMode
+      ? // "Answer everything" — talks like ChatGPT, but business facts still come only from the data below.
+        '- Talk like a friendly, helpful human assistant (like ChatGPT): reply to EVERY message — greetings, small talk, "thanks", ' +
+        'general questions (how-to, advice, explanations, maths, meanings …) and questions about this business. Always set relevant=true.\n' +
+        '- Keep it WhatsApp-sized: usually 1–5 short sentences or a short list; longer only if the customer asks for details. Plain text, a few emojis at most.\n' +
+        '- For facts about THIS business (prices, stock, offers, timings, fees, address, policies, order status) use ONLY the information below — never invent them. ' +
+        `If something is not there, say politely you'll check with the team, set handoff=true, and still give whatever help you can (e.g. "${fallbackText}").\n` +
+        '- If the customer is upset, wants a human, or it is about refunds, payments or complaints: reply kindly and set handoff=true.\n' +
+        '- Gently bring the chat back to how you can help with this business when it fits, without being pushy.\n' +
+        '- Only for abusive or sexual messages: set relevant=false and reply="".\n'
+      : '- Short and friendly: 1–4 sentences, plain text, at most a few emojis.\n' +
         '- Use ONLY facts from the business information, training data and products below. Never invent prices, stock, offers, timings, fees or policies.\n' +
-        '- If a customer wants something one of the menu options below provides, tell them exactly what to type.\n' +
         '- Answer ONLY real questions or requests about this business, its services or products (or a simple greeting).\n' +
         '  For anything else — random words, chit-chat, jokes, "ok/thanks", forwards, personal or off-topic questions, rude or abusive messages — ' +
         'set relevant=false and reply="". Staying silent is better than a useless reply.\n' +
         '- If the answer is not available, the customer is upset, wants a human, or it is about refunds, payments or complaints: ' +
-        `set handoff=true and reply with something close to: "${fallbackText}"\n` +
+        `set handoff=true and reply with something close to: "${fallbackText}"\n`;
+    const out = await this.llm.json<{ relevant?: boolean; reply: string; handoff: boolean; reason?: string }>(
+      `You are ${bot.assistantName || 'the WhatsApp assistant'}${bot.companyName ? ` for ${bot.companyName}` : ''}, chatting with customers on WhatsApp.\n` +
+        'Rules:\n' +
+        languageRule +
+        scopeRules +
+        '- If a customer wants something one of the menu options below provides, tell them exactly what to type.\n' +
         '- Never ask for passwords, OTPs or card numbers.\n' +
         (bot.instructions ? `\nInstructions:\n${bot.instructions}\n` : '') +
         (info ? `\nBusiness information:\n${info}\n` : '') +
@@ -182,8 +197,10 @@ export class BotEngine {
       `Customer name: ${contact.name || 'unknown'}\nConversation so far (oldest first):\n${transcript || '(none)'}\n\nCustomer's latest message(s): ${text}\n\n` +
         'Return {"relevant": boolean, "reply": string, "handoff": boolean, "reason": string}',
     );
-    if (out.relevant === false) return { messages: [], via: 'ignored', handoff: false, reason: out.reason || 'Not about the business' };
-    const reply = String(out.reply || '').slice(0, 1500).trim();
+    if (out.relevant === false && !(chatMode && String(out.reply || '').trim())) {
+      return { messages: [], via: 'ignored', handoff: false, reason: out.reason || 'Not about the business' };
+    }
+    const reply = String(out.reply || '').slice(0, chatMode ? 3000 : 1500).trim();
     return { messages: reply ? [{ type: 'text', text: reply }] : [], via: 'ai', handoff: !!out.handoff, reason: out.reason };
   }
 }

@@ -28,6 +28,7 @@ class BotDto {
   @IsOptional() @IsString() @MaxLength(1000) welcomeMessageHi?: string;
   @IsOptional() @IsString() @MaxLength(1000) fallbackMessageHi?: string;
   @IsOptional() @IsBoolean() useProducts?: boolean;
+  @IsOptional() @IsBoolean() alwaysReply?: boolean;
 }
 
 class StepDto {

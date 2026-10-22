@@ -1,6 +1,6 @@
 import { Global, Injectable, Logger, Module, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import makeWASocket, {
-  Browsers, DisconnectReason, WASocket, fetchLatestBaileysVersion, normalizeMessageContent, 
+  Browsers, DisconnectReason, WASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, normalizeMessageContent, proto,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
@@ -35,7 +35,7 @@ const START_TIMEOUT_MS = 60_000;
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && !Number.isNaN(Number(v)) ? Math.max(0, Number(v)) : d);
 const TYPING_MIN_MS = num(process.env.TYPING_MIN_MS, 700);
 const TYPING_MS_PER_CHAR = num(process.env.TYPING_MS_PER_CHAR, 25);
-const TYPING_MAX_MS = num(process.env.TYPING_MAX_MS, 4000);
+const TYPING_MAX_MS = num(process.env.TYPING_MAX_MS, 2500);
 const MEDIA_DELAY_MS = num(process.env.MEDIA_DELAY_MS, 800);
 
 /**
@@ -55,6 +55,38 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
   private retries = new Map<string, number>();
   /** accountIds whose connection is being opened right now (prevents two sockets at once) */
   private opening = new Set<string>();
+  /** accountId -> "always online" setting, and the timer that keeps re-sending "online" */
+  private alwaysOnline = new Map<string, boolean>();
+  private presenceTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * "Always online": WhatsApp shows a linked device as online only while it keeps saying so, so we repeat
+   * "available" every 45 s. Note: while WhatsApp thinks you are online on a linked device, the phone
+   * shows fewer notifications — that's why this is a per-number choice, off by default.
+   * (People only see it if the phone's privacy setting lets them see "online".)
+   */
+  setAlwaysOnline(accountId: string, on: boolean) {
+    this.alwaysOnline.set(accountId, on);
+    this.applyPresence(accountId);
+  }
+
+  private applyPresence(accountId: string) {
+    clearInterval(this.presenceTimers.get(accountId));
+    this.presenceTimers.delete(accountId);
+    const s = this.sessions.get(accountId);
+    if (!s?.sock || s.state.status !== 'connected') return;
+    const sock = s.sock;
+    if (this.alwaysOnline.get(accountId)) {
+      const ping = () => sock.sendPresenceUpdate('available').catch(() => undefined);
+      ping();
+      this.presenceTimers.set(accountId, setInterval(() => {
+        if (this.sessions.get(accountId)?.sock !== sock) return clearInterval(this.presenceTimers.get(accountId));
+        ping();
+      }, 45_000));
+    } else {
+      sock.sendPresenceUpdate('unavailable').catch(() => undefined);
+    }
+  }
 
   constructor(private prisma: PrismaService, private rt: RealtimeGateway) {}
 
@@ -121,6 +153,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
 
   async onModuleDestroy() {
     if (this.watchdog) clearInterval(this.watchdog);
+    for (const t of this.presenceTimers.values()) clearInterval(t);
     if (this.keepAlive) clearInterval(this.keepAlive);
     for (const s of this.sessions.values()) {
       s.stopping = true;
@@ -146,9 +179,10 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
       try { existing.sock.end(undefined); } catch { /* already closed */ }
       existing.sock = undefined;
     }
-    const acc = await this.prisma.account.findUnique({ where: { id: accountId }, select: { workspaceId: true } });
+    const acc = await this.prisma.account.findUnique({ where: { id: accountId }, select: { workspaceId: true, alwaysOnline: true } });
     if (!acc) throw new Error('Number not found');
     this.owners.set(accountId, acc.workspaceId);
+    this.alwaysOnline.set(accountId, acc.alwaysOnline);
     this.sessions.set(accountId, { sock: undefined, stopping: false, state: { status: 'starting', qr: null, lastError: null } });
     this.update(accountId, {});
     const mine = this.sessions.get(accountId)!;
@@ -182,12 +216,22 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     } catch {
       /* fall back to the library's built-in version */
     }
+    const silent = pino({ level: 'silent' }) as any;
     const sock = makeWASocket({
-      auth: state,
+      // In-memory cache in front of the database: encryption keys are read back instantly and exactly as just
+      // written. Without it, messages after the first one could fail to decrypt and never reach the bot.
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, silent) },
+      // When a customer's phone couldn't decrypt one of our replies it asks again; give it the text so it
+      // doesn't stay as "Waiting for this message".
+      getMessage: async (key) => {
+        if (!key.id) return undefined;
+        const m = await this.prisma.message.findUnique({ where: { externalId: key.id }, select: { body: true, type: true } }).catch(() => null);
+        return m && m.type === 'text' ? proto.Message.fromObject({ conversation: m.body }) : undefined;
+      },
       ...(version ? { version } : {}),
       browser: Browsers.windows('SAS Chatbot'),
-      logger: pino({ level: 'silent' }) as any,
-      markOnlineOnConnect: false,
+      logger: silent,
+      markOnlineOnConnect: !!this.alwaysOnline.get(accountId),
       syncFullHistory: false,
     });
     const session = this.sessions.get(accountId)!;
@@ -208,6 +252,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
         this.retries.delete(accountId);
         const phone = sock.user?.id ? toWaId(sock.user.id) : null;
         this.update(accountId, { status: 'connected', qr: null, lastError: null }, session);
+        this.applyPresence(accountId);
         if (phone) await this.prisma.account.update({ where: { id: accountId }, data: { phone } }).catch(() => undefined);
         this.rt.toWorkspace(this.owners.get(accountId), 'account', { id: accountId, ...session.state, phone });
         this.log.log(`Connected +${phone}`);
@@ -221,6 +266,8 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
         const reason = (u.lastDisconnect?.error as any)?.message as string | undefined;
         const waitingForScan = session.state.status === 'qr';
         session.sock = undefined;
+        clearInterval(this.presenceTimers.get(accountId));
+        this.presenceTimers.delete(accountId);
         this.log.warn(`Connection closed for ${accountId}: code ${code ?? '-'} ${reason ?? ''}`);
         const linked = !!state.creds?.registered;
         const tries = (this.retries.get(accountId) ?? 0) + 1;
@@ -274,6 +321,12 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     });
 
     return session.state;
+  }
+
+  /** Show or stop "typing…" in one chat (used while the AI is thinking, so the customer sees activity at once). */
+  async presence(accountId: string, to: string, state: 'composing' | 'paused') {
+    const s = this.sessions.get(accountId);
+    if (s?.sock && s.state.status === 'connected') await s.sock.sendPresenceUpdate(state, toJid(to)).catch(() => undefined);
   }
 
   /** `typing: false` sends at once (replies typed by a person in the dashboard); bot replies show "typing…" first. */

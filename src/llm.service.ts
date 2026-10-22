@@ -73,17 +73,19 @@ export class LlmService {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     let lastError = 'OpenAI request failed';
     for (const model of models) {
-      let level = this.openaiCompat.get(model) ?? 0;
+      // Only reasoning models (gpt-5…, o1/o3/o4…) take reasoning_effort; others start at plain JSON mode (saves a failed call).
+      let level = this.openaiCompat.get(model) ?? (/^(gpt-5|o\d)/i.test(model) ? 0 : 1);
       for (let attempt = 1; attempt <= 2 && level <= 2; ) {
         let res: Response;
         try {
           res = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: { authorization: `Bearer ${this.settings.get('OPENAI_API_KEY')}`, 'content-type': 'application/json' },
-            signal: AbortSignal.timeout(20_000),
+            signal: AbortSignal.timeout(15_000),
             body: JSON.stringify({
               model,
-              messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
+              // JSON mode requires the word "json" in the messages, or OpenAI rejects the request (400).
+              messages: [{ role: 'system', content: `${system}\n\nRespond with a single JSON object only.` }, { role: 'user', content: prompt }],
               // Reasoning models also spend tokens "thinking": leave room for that.
               max_completion_tokens: maxTokens + 1500,
               ...(level < 2 ? { response_format: { type: 'json_object' } } : {}),

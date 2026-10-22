@@ -18,6 +18,7 @@ class UpdateAccountDto {
   @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) workStart?: string;
   @IsOptional() @Matches(/^([01]\d|2[0-3]):[0-5]\d$/) workEnd?: string;
   @IsOptional() @IsString() timezone?: string;
+  @IsOptional() @IsBoolean() alwaysOnline?: boolean;
 }
 
 @Controller('accounts')
@@ -81,6 +82,7 @@ export class AccountsController {
       else if (dto[k] && !(await this.prisma.bot.findFirst({ where: { id: dto[k]!, workspaceId: ws(u) } }))) throw new NotFoundException('Bot not found');
     }
     await this.prisma.account.update({ where: { id }, data });
+    if (dto.alwaysOnline !== undefined) this.sessions.setAlwaysOnline(id, dto.alwaysOnline);
     return this.get(u, id);
   }
 

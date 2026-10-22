@@ -81,6 +81,9 @@ export async function useDbAuthState(prisma: PrismaService, accountId: string): 
         get: async <T extends keyof SignalDataTypeMap>(type: T, ids: string[]) => {
           const out: { [id: string]: SignalDataTypeMap[T] } = {};
           if (!ids.length) return out;
+          // Read-your-writes: wait for key updates still being saved. Reading a stale encryption session
+          // makes WhatsApp messages undecryptable ("Over 2000 messages into the future", "Bad MAC").
+          await queue.catch(() => undefined);
           const rows = await prisma.waAuth.findMany({ where: { accountId, key: { in: ids.map((id) => `${type}-${id}`) } } });
           const byKey = new Map<string, string>(rows.map((r: { key: string; value: string }) => [r.key, r.value]));
           for (const id of ids) {

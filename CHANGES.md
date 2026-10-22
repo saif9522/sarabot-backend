@@ -2,8 +2,8 @@
 
 ## 1. Deploy steps (do these in order)
 
-1. **Database**: add 3 new columns to `Bot` — run `npx prisma db push` once,
-   or paste `prisma/manual/2026-10-22-bot-language.sql` into the Supabase SQL editor.
+1. **Database**: the 3 new `Bot` columns are now added automatically when the app starts
+   (src/prisma.service.ts). You can also add them by hand: `prisma/manual/2026-10-22-bot-language.sql`.
 2. **SESSION_SECRET**: make sure it is set on Render (32+ random characters, `openssl rand -hex 32`).
    If it is already set, keep the same value (changing it unlinks WhatsApp numbers and clears saved API keys).
    The app now refuses to start on Render / `NODE_ENV=production` without it.
@@ -51,3 +51,32 @@ Shown as "Training data" in chats and in the Test tab.
 - Bot test endpoint: history size capped (each test costs AI money); flow toggle body validated.
 - Bot settings page now shows an error when saving fails.
 - Frontend: removed unused duplicate files in the root (`api.ts`, `ui.tsx`, `page.tsx`, `tsconfig.tsbuildinfo`).
+
+## 5. ChatGPT-style replies + always online (22 Oct, update 2)
+
+- **Bot → Settings → "Answer every message (like ChatGPT)"** — ON by default. The AI now replies to everything
+  (greetings, "thanks", general questions, "Hindi me baat karo" …). Business facts still come only from your data.
+  Before, the AI was told to stay silent on anything not about the business — that is why some messages got no reply.
+  Turn it OFF for the old "business questions only" behaviour.
+- If the customer asks for a language ("Hindi me baat karo"), the AI keeps using it.
+- **Numbers → Manage → "Always show online"** — OFF by default, per number. Keeps the number "online" instead of
+  "last seen". Side effect: the phone may show fewer WhatsApp notifications while it is on.
+- New columns `Bot.alwaysReply` and `Account.alwaysOnline` are added automatically on startup.
+
+## 6. Fix: replies stopped after the first message (22 Oct, update 3)
+
+- **Cause**: WhatsApp encryption keys were read from the database before the previous update was saved, so the
+  next incoming message could not be decrypted ("Failed to decrypt", "Over 2000 messages into the future") and never
+  reached the bot (grey ticks, no reply). Fixed: reads wait for pending writes + Baileys' in-memory key cache.
+- Customers asking to re-send an undecryptable reply now get it (no more "Waiting for this message").
+- Faster: wait for follow-up messages 2 s (was 3), "typing…" max 2.5 s (was 4), OpenAI timeout 15 s (was 20).
+- After deploying: Numbers → Unlink, then Link again with a fresh QR once, to start with clean encryption sessions.
+- Faster feel: "typing…" shows the moment a message arrives, while the AI thinks; the reply then goes out
+  without an extra typing pause. Wait for follow-up messages: 1.5 s.
+
+## 7. Clear logs for every "no reply" (22 Oct, update 4)
+
+- Every time the bot stays silent the log says why: `No reply to +91…: <reason>` (bot off, chat paused by a person,
+  plan used up, hourly limit, fallback already sent, AI said nothing …).
+- `/api/health` now shows `build` (which code is running) and `ai` (which AI provider has a key).
+- OpenAI: models without "reasoning" (gpt-4o-mini, gpt-4.1-mini) skip the reasoning setting → first reply faster.
