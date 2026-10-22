@@ -62,3 +62,12 @@ Shown as "Training data" in chats and in the Test tab.
 - **Numbers → Manage → "Always show online"** — OFF by default, per number. Keeps the number "online" instead of
   "last seen". Side effect: the phone may show fewer WhatsApp notifications while it is on.
 - New columns `Bot.alwaysReply` and `Account.alwaysOnline` are added automatically on startup.
+
+## 6. Fix: replies stopped after the first message (22 Oct, update 3)
+
+- **Cause**: WhatsApp encryption keys were read from the database before the previous update was saved, so the
+  next incoming message could not be decrypted ("Failed to decrypt", "Over 2000 messages into the future") and never
+  reached the bot (grey ticks, no reply). Fixed: reads wait for pending writes + Baileys' in-memory key cache.
+- Customers asking to re-send an undecryptable reply now get it (no more "Waiting for this message").
+- Faster: wait for follow-up messages 2 s (was 3), "typing…" max 2.5 s (was 4), OpenAI timeout 15 s (was 20).
+- After deploying: Numbers → Unlink, then Link again with a fresh QR once, to start with clean encryption sessions.

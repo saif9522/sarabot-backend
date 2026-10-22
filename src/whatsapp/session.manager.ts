@@ -1,6 +1,6 @@
 import { Global, Injectable, Logger, Module, OnApplicationBootstrap, OnModuleDestroy } from '@nestjs/common';
 import makeWASocket, {
-  Browsers, DisconnectReason, WASocket, fetchLatestBaileysVersion, normalizeMessageContent, 
+  Browsers, DisconnectReason, WASocket, fetchLatestBaileysVersion, makeCacheableSignalKeyStore, normalizeMessageContent, proto,
 } from '@whiskeysockets/baileys';
 import pino from 'pino';
 import * as QRCode from 'qrcode';
@@ -35,7 +35,7 @@ const START_TIMEOUT_MS = 60_000;
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && !Number.isNaN(Number(v)) ? Math.max(0, Number(v)) : d);
 const TYPING_MIN_MS = num(process.env.TYPING_MIN_MS, 700);
 const TYPING_MS_PER_CHAR = num(process.env.TYPING_MS_PER_CHAR, 25);
-const TYPING_MAX_MS = num(process.env.TYPING_MAX_MS, 4000);
+const TYPING_MAX_MS = num(process.env.TYPING_MAX_MS, 2500);
 const MEDIA_DELAY_MS = num(process.env.MEDIA_DELAY_MS, 800);
 
 /**
@@ -216,11 +216,21 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     } catch {
       /* fall back to the library's built-in version */
     }
+    const silent = pino({ level: 'silent' }) as any;
     const sock = makeWASocket({
-      auth: state,
+      // In-memory cache in front of the database: encryption keys are read back instantly and exactly as just
+      // written. Without it, messages after the first one could fail to decrypt and never reach the bot.
+      auth: { creds: state.creds, keys: makeCacheableSignalKeyStore(state.keys, silent) },
+      // When a customer's phone couldn't decrypt one of our replies it asks again; give it the text so it
+      // doesn't stay as "Waiting for this message".
+      getMessage: async (key) => {
+        if (!key.id) return undefined;
+        const m = await this.prisma.message.findUnique({ where: { externalId: key.id }, select: { body: true, type: true } }).catch(() => null);
+        return m && m.type === 'text' ? proto.Message.fromObject({ conversation: m.body }) : undefined;
+      },
       ...(version ? { version } : {}),
       browser: Browsers.windows('SAS Chatbot'),
-      logger: pino({ level: 'silent' }) as any,
+      logger: silent,
       markOnlineOnConnect: !!this.alwaysOnline.get(accountId),
       syncFullHistory: false,
     });

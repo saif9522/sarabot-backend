@@ -80,7 +80,7 @@ export class LlmService {
           res = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
             headers: { authorization: `Bearer ${this.settings.get('OPENAI_API_KEY')}`, 'content-type': 'application/json' },
-            signal: AbortSignal.timeout(20_000),
+            signal: AbortSignal.timeout(15_000),
             body: JSON.stringify({
               model,
               messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],

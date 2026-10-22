@@ -7,7 +7,7 @@ import { pickText, replyLanguage, say } from '../bot/language';
 import { Inbound, SessionManager } from './session.manager';
 import { SubscriptionService } from '../billing/subscription.service';
 
-const DEBOUNCE_MS = Math.max(0, Number(process.env.REPLY_DEBOUNCE_SECONDS ?? 3)) * 1000;
+const DEBOUNCE_MS = Math.max(0, Number(process.env.REPLY_DEBOUNCE_SECONDS ?? 2)) * 1000;
 const MAX_PER_HOUR = Number(process.env.MAX_BOT_REPLIES_PER_HOUR ?? 30);
 /** After a fallback / no-match reply, stay silent with that person for this long. */
 const FALLBACK_COOLDOWN_MS = Math.max(0, Number(process.env.FALLBACK_COOLDOWN_MINUTES ?? 60)) * 60_000;
