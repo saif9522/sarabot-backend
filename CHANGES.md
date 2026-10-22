@@ -71,3 +71,5 @@ Shown as "Training data" in chats and in the Test tab.
 - Customers asking to re-send an undecryptable reply now get it (no more "Waiting for this message").
 - Faster: wait for follow-up messages 2 s (was 3), "typing…" max 2.5 s (was 4), OpenAI timeout 15 s (was 20).
 - After deploying: Numbers → Unlink, then Link again with a fresh QR once, to start with clean encryption sessions.
+- Faster feel: "typing…" shows the moment a message arrives, while the AI thinks; the reply then goes out
+  without an extra typing pause. Wait for follow-up messages: 1.5 s.

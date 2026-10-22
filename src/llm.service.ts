@@ -73,7 +73,8 @@ export class LlmService {
     const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     let lastError = 'OpenAI request failed';
     for (const model of models) {
-      let level = this.openaiCompat.get(model) ?? 0;
+      // Only reasoning models (gpt-5…, o1/o3/o4…) take reasoning_effort; others start at plain JSON mode (saves a failed call).
+      let level = this.openaiCompat.get(model) ?? (/^(gpt-5|o\d)/i.test(model) ? 0 : 1);
       for (let attempt = 1; attempt <= 2 && level <= 2; ) {
         let res: Response;
         try {

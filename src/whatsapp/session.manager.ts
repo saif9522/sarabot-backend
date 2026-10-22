@@ -323,6 +323,12 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
     return session.state;
   }
 
+  /** Show or stop "typing…" in one chat (used while the AI is thinking, so the customer sees activity at once). */
+  async presence(accountId: string, to: string, state: 'composing' | 'paused') {
+    const s = this.sessions.get(accountId);
+    if (s?.sock && s.state.status === 'connected') await s.sock.sendPresenceUpdate(state, toJid(to)).catch(() => undefined);
+  }
+
   /** `typing: false` sends at once (replies typed by a person in the dashboard); bot replies show "typing…" first. */
   async sendText(accountId: string, to: string, text: string, opts: { typing?: boolean } = {}): Promise<string | undefined> {
     const s = this.sessions.get(accountId);

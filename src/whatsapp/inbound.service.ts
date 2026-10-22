@@ -7,7 +7,7 @@ import { pickText, replyLanguage, say } from '../bot/language';
 import { Inbound, SessionManager } from './session.manager';
 import { SubscriptionService } from '../billing/subscription.service';
 
-const DEBOUNCE_MS = Math.max(0, Number(process.env.REPLY_DEBOUNCE_SECONDS ?? 2)) * 1000;
+const DEBOUNCE_MS = Math.max(0, Number(process.env.REPLY_DEBOUNCE_SECONDS ?? 1.5)) * 1000;
 const MAX_PER_HOUR = Number(process.env.MAX_BOT_REPLIES_PER_HOUR ?? 30);
 /** After a fallback / no-match reply, stay silent with that person for this long. */
 const FALLBACK_COOLDOWN_MS = Math.max(0, Number(process.env.FALLBACK_COOLDOWN_MINUTES ?? 60)) * 60_000;
@@ -25,6 +25,8 @@ export class InboundService implements OnModuleInit {
   private again = new Set<string>();
   /** contactId -> time of the newest customer message the bot has already replied to (survives only until restart). */
   private handledUpTo = new Map<string, number>();
+  /** contactId -> true when "typing…" was already shown long enough while thinking */
+  private quickReply = new Map<string, boolean>();
 
   constructor(private prisma: PrismaService, private sessions: SessionManager, private engine: BotEngine, private rt: RealtimeGateway, private subs: SubscriptionService) {}
 
@@ -105,7 +107,19 @@ export class InboundService implements OnModuleInit {
 
       // Answer everything the customer sent since our last reply.
       const unanswered = history.filter((h) => h.direction === 'in' && h.createdAt.getTime() > cutoff).map((h) => h.body);
-      const decision = await this.engine.decide(bot, lastIn.body, unanswered.join('\n'), history.map((h) => ({ direction: h.direction as 'in' | 'out', body: h.body })), contact);
+      // Show "typing…" right away while the reply is worked out (AI can take a few seconds).
+      const thinkingSince = Date.now();
+      this.sessions.presence(account.id, contact.waId, 'composing');
+      let decision;
+      try {
+        decision = await this.engine.decide(bot, lastIn.body, unanswered.join('\n'), history.map((h) => ({ direction: h.direction as 'in' | 'out', body: h.body })), contact);
+      } catch (e) {
+        this.sessions.presence(account.id, contact.waId, 'paused');
+        throw e;
+      }
+      // The customer has already watched "typing…" while we were thinking: don't make them wait again.
+      this.quickReply.set(contactId, Date.now() - thinkingSince > 1200);
+      if (!decision.messages.length) this.sessions.presence(account.id, contact.waId, 'paused');
 
       // Welcome in the customer's language (Hindi version for Hindi / Hinglish customers, if the owner wrote one).
       const isFirstConversation = !history.some((h) => h.direction === 'out');
@@ -173,6 +187,7 @@ export class InboundService implements OnModuleInit {
       }
       if (decision.handoff) await this.flagHuman(contact.id, account.id);
     } finally {
+      this.quickReply.delete(contactId);
       this.busy.delete(contactId);
       if (this.again.delete(contactId)) {
         this.respond(contactId).catch((e) => this.log.error(`Reply failed: ${e.message}`));
@@ -206,7 +221,7 @@ export class InboundService implements OnModuleInit {
       return null;
     }
     const externalId = msg.type === 'text'
-      ? await this.sessions.sendText(accountId, waId, msg.text, { typing: sentBy !== 'human' }) // a person's reply goes out instantly
+      ? await this.sessions.sendText(accountId, waId, msg.text, { typing: sentBy !== 'human' && !this.quickReply.get(contactId) }) // a person's reply goes out instantly
       : await this.sessions.sendMedia(accountId, waId, msg);
     const saved = await this.prisma.message.create({
       data: {
