@@ -182,7 +182,8 @@ export class BotEngine {
         'set relevant=false and reply="". Staying silent is better than a useless reply.\n' +
         '- If the answer is not available, the customer is upset, wants a human, or it is about refunds, payments or complaints: ' +
         `set handoff=true and reply with something close to: "${fallbackText}"\n`;
-    const out = await this.llm.json<{ relevant?: boolean; reply: string; handoff: boolean; reason?: string }>(
+    type AiOut = { relevant?: boolean; reply: string; handoff: boolean; reason?: string };
+    const ask = (extra = '') => this.llm.json<AiOut>(
       `You are ${bot.assistantName || 'the WhatsApp assistant'}${bot.companyName ? ` for ${bot.companyName}` : ''}, chatting with customers on WhatsApp.\n` +
         'Rules:\n' +
         languageRule +
@@ -191,6 +192,9 @@ export class BotEngine {
         '- Customers often misspell words and product names or type in short Hinglish ("sarf ka price", "kitne ka h", "pric?", "rin powdr"). ' +
         'Work out what they most likely mean (the closest product or topic) and answer that — do not ignore the message or ask them to type correctly. ' +
         'If two products are equally likely, give both or ask which one in the same reply.\n' +
+        '- The customer may have sent SEVERAL messages in a row (all listed under "latest message(s)"). Answer EVERY question in them ' +
+        'in one reply — e.g. "Egg bhi hai?" + "Sabji me kya kya hai?" → answer both. Never answer only the last one.\n' +
+        (chatMode ? '- If asked to write something (a letter, message, caption, application …), write it right away with sensible details; ask only if truly impossible.\n' : '') +
         '- Never ask for passwords, OTPs or card numbers.\n' +
         (bot.instructions ? `\nInstructions:\n${bot.instructions}\n` : '') +
         (info ? `\nBusiness information:\n${info}\n` : '') +
@@ -198,8 +202,16 @@ export class BotEngine {
         (flowsHint ? `\nMenu options customers can type:\n${flowsHint}\n` : '') +
         (catalogue ? `\nProducts:\n${catalogue}\n` : ''),
       `Customer name: ${contact.name || 'unknown'}\nConversation so far (oldest first):\n${transcript || '(none)'}\n\nCustomer's latest message(s): ${text}\n\n` +
-        'Return {"relevant": boolean, "reply": string, "handoff": boolean, "reason": string}',
+        'Return {"relevant": boolean, "reply": string, "handoff": boolean, "reason": string}' + extra,
     );
+    let out = await ask();
+    // "Answer everything" mode must never go silent: if the AI came back empty, ask once more, firmly.
+    if (chatMode && !String(out.reply || '').trim() && out.relevant !== false) {
+      out = await ask('\n\nYour previous answer had an empty "reply". Write a helpful, friendly reply to the customer now (relevant=true).');
+    }
+    if (chatMode && !String(out.reply || '').trim() && out.relevant !== false) {
+      out = { ...out, reply: fallbackText, handoff: true, reason: 'AI gave no answer twice' };
+    }
     if (out.relevant === false && !(chatMode && String(out.reply || '').trim())) {
       return { messages: [], via: 'ignored', handoff: false, reason: out.reason || 'Not about the business' };
     }

@@ -88,3 +88,10 @@ Shown as "Training data" in chats and in the Test tab.
 - Contacts are saved by real phone number when WhatsApp provides it (no more "+2203…@lid").
 - Node 22 is required (`engines` in package.json + `.node-version`; Render picks it up automatically).
 - After deploying: Numbers → Manage → Unlink phone, then Link and scan a new QR once.
+
+## 9. Answer every message in a burst (22 Oct, update 6)
+
+- Several messages in a row ("Egg bhi hai?" + "Sabji me kya hai?") now get ONE reply that answers all of them.
+- "Answer everything" mode never goes silent: if the AI returns an empty reply it is asked again once,
+  then the fallback text is sent.
+- Requests to write something (letter, message) are written right away.
