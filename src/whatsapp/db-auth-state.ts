@@ -3,6 +3,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypt
 import { existsSync, promises as fs } from 'fs';
 import * as path from 'path';
 import { PrismaService } from '../prisma.service';
+import { appSecret } from '../auth/crypto';
 
 /**
  * WhatsApp login kept in Postgres instead of files.
@@ -11,7 +12,7 @@ import { PrismaService } from '../prisma.service';
  * Values are encrypted (AES-256-GCM) with a key derived from SESSION_SECRET.
  */
 
-const key = () => createHash('sha256').update(`wa-auth:${process.env.SESSION_SECRET || 'dev-only-secret-change-me-dev-only-secret'}`).digest();
+const key = () => createHash('sha256').update(`wa-auth:${appSecret()}`).digest();
 
 function encrypt(plain: string) {
   const iv = randomBytes(12);

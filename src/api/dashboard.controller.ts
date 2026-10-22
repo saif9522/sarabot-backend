@@ -48,7 +48,7 @@ export class DashboardController {
           received: n((r) => r.direction === 'in'),
           botReplies: n((r) => r.direction === 'out' && r.sentBy !== 'human'),
           humanReplies: n((r) => r.sentBy === 'human'),
-          byFlow: n((r) => r.sentBy === 'flow' || r.sentBy === 'nomatch'),
+          byFlow: n((r) => r.sentBy === 'flow' || r.sentBy === 'nomatch' || r.sentBy === 'faq'),
           byAi: n((r) => r.sentBy === 'ai'),
         };
       }),

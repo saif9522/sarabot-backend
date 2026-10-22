@@ -155,6 +155,11 @@ model Bot {
   // ----
   welcomeMessage  String    @default("")
   fallbackMessage String    @default("Thanks for your message! Our team will reply shortly.")
+  /// Reply language: "auto" (same as the customer) | "en" | "hi" (Devanagari) | "hinglish"
+  language          String  @default("auto")
+  /// Hindi versions, sent to customers who write in Hindi / Hinglish (empty = use the English one)
+  welcomeMessageHi  String  @default("")
+  fallbackMessageHi String  @default("")
   useProducts     Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt

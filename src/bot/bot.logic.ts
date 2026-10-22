@@ -70,8 +70,8 @@ export function render(template: string, vars: { name?: string | null; number: s
 export type OptCommand = 'stop' | 'start' | null;
 export function optCommand(text: string): OptCommand {
   const t = normalize(text);
-  if (['stop', 'unsubscribe', 'stop all', 'band karo'].includes(t)) return 'stop';
-  if (['start', 'subscribe', 'unstop'].includes(t)) return 'start';
+  if (['stop', 'unsubscribe', 'stop all', 'band karo', 'band kro', 'message band karo', 'msg band karo', 'बंद करो', 'मैसेज बंद करो', 'रोको'].includes(t)) return 'stop';
+  if (['start', 'subscribe', 'unstop', 'start karo', 'chalu karo', 'चालू करो', 'शुरू करो'].includes(t)) return 'start';
   return null;
 }
 
@@ -95,6 +95,7 @@ const ACKS = new Set([
   'shukriya', 'dhanyavad', 'dhanyawad', 'done', 'fine', 'cool', 'nice', 'good', 'great', 'alright', 'sure', 'yes', 'no', 'haan', 'han', 'ha',
   'ji', 'ji haan', 'nahi', 'na', 'bye', 'tc', 'gn', 'gm', 'ठीक है', 'धन्यवाद', 'ओके', 'हाँ', 'जी',
 ]);
+const ACK_FILLER = new Set(['thank', 'you', 'u', 'very', 'much', 'so', 'sir', 'madam', 'mam', 'ji', 'bhai', 'bhaiya', 'dear', 'bahut', 'bohot', 'bhot', 'hai', 'got', 'it', 'all', 'ok', 'okay', 'बहुत', 'सर', 'जी', 'है']);
 const ABUSE_WORDS = new Set(['mc', 'bc', 'bsdk', 'bkl', 'mkc', 'tmkc', 'bhenchod', 'gandu', 'gaandu', 'lund', 'lauda', 'laude', 'lavde', 'randi', 'harami', 'kamina', 'kamine', 'chutiya', 'chutiye', 'chutia', 'fuck', 'fck', 'bitch', 'bastard', 'asshole', 'shit']);
 const ABUSE_PREFIXES = ['bhosd', 'bhosad', 'bhasud', 'bhosr', 'madarch', 'maderch', 'madarc', 'behench', 'bhench', 'behanch', 'chutiy', 'motherf', 'fuck', 'randw', 'भोसड', 'मादरच', 'बहनच', 'चुतिय', 'गांडू', 'रंडी'];
 
@@ -109,6 +110,9 @@ export function noiseReason(text: string): 'empty' | 'acknowledgement' | 'abusiv
   const words = t.split(' ');
   if (words.some((w) => ABUSE_WORDS.has(w) || ABUSE_PREFIXES.some((p) => w.startsWith(p)))) return 'abusive';
   if (ACKS.has(t) || ACKS.has(t.replace(/(.)\1{2,}/g, '$1$1'))) return 'acknowledgement';
+  // "ok thanks", "thank you so much sir", "theek hai ji" — only acknowledgement words and fillers.
+  const squeezed = words.map((w) => w.replace(/(.)\1{2,}/g, '$1$1'));
+  if (squeezed.length <= 6 && squeezed.some((w) => ACKS.has(w)) && squeezed.every((w) => ACKS.has(w) || ACK_FILLER.has(w))) return 'acknowledgement';
   return null;
 }
 

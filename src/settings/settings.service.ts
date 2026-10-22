@@ -1,6 +1,7 @@
 import { Global, Injectable, Logger, Module, OnModuleInit } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { PrismaService } from '../prisma.service';
+import { appSecret } from '../auth/crypto';
 
 /** Settings the Super Admin can change from the dashboard. Each falls back to the .env value. */
 export const SETTING_KEYS = {
@@ -17,7 +18,7 @@ export const SETTING_KEYS = {
 } as const;
 export type SettingKey = keyof typeof SETTING_KEYS;
 
-const encKey = () => createHash('sha256').update(`settings:${process.env.SESSION_SECRET || 'dev-only-secret-change-me-dev-only-secret'}`).digest();
+const encKey = () => createHash('sha256').update(`settings:${appSecret()}`).digest();
 
 function encrypt(plain: string) {
   const iv = randomBytes(12);

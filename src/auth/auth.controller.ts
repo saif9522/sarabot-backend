@@ -4,7 +4,7 @@ import { Response } from 'express';
 import { IsEmail, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { PrismaService } from '../prisma.service';
 import { AnyUser, AuthUser, CurrentUser, Public } from './auth.guard';
-import { ACT_AS_COOKIE, SESSION_COOKIE, hashPassword, signToken, verifyPassword } from './crypto';
+import { ACT_AS_COOKIE, SESSION_COOKIE, appSecret, hashPassword, signToken, verifyPassword } from './crypto';
 import { SubscriptionService } from '../billing/subscription.service';
 import { MailerService } from './mailer.service';
 import { SettingsService } from '../settings/settings.service';
@@ -95,7 +95,7 @@ export class AuthController {
   private static readonly OTP_TTL_MS = 10 * 60_000;
   private static readonly OTP_MAX_ATTEMPTS = 5;
   private otpHash(userId: string, code: string) {
-    return createHmac('sha256', `otp:${process.env.SESSION_SECRET || 'dev-only-secret-change-me-dev-only-secret'}`).update(`${userId}:${code}`).digest('hex');
+    return createHmac('sha256', `otp:${appSecret()}`).update(`${userId}:${code}`).digest('hex');
   }
 
   /** Sends a 6-digit code. Same reply whether or not the email has an account. */

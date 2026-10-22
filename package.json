@@ -11,7 +11,8 @@
     "create-admin": "node scripts/create-superadmin.js",
     "copy-data": "node scripts/copy-sqlite-to-postgres.js",
     "postinstall": "prisma generate",
-    "start:prod": "prisma migrate deploy && node dist/main"
+    "start:prod": "prisma migrate deploy && node dist/main",
+    "test:bot": "node scripts/test-bot-language.js"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.0",

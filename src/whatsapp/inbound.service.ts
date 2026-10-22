@@ -3,6 +3,7 @@ import { PrismaService } from '../prisma.service';
 import { RealtimeGateway } from '../realtime.gateway';
 import { BotEngine, OutMessage } from '../bot/bot.engine';
 import { isWorkingHours, optCommand, render } from '../bot/bot.logic';
+import { pickText, replyLanguage, say } from '../bot/language';
 import { Inbound, SessionManager } from './session.manager';
 import { SubscriptionService } from '../billing/subscription.service';
 
@@ -20,6 +21,10 @@ export class InboundService implements OnModuleInit {
   private readonly log = new Logger('Inbound');
   private timers = new Map<string, NodeJS.Timeout>();
   private busy = new Set<string>();
+  /** Contacts that wrote again while their reply was being prepared: answer them once the current reply is out. */
+  private again = new Set<string>();
+  /** contactId -> time of the newest customer message the bot has already replied to (survives only until restart). */
+  private handledUpTo = new Map<string, number>();
 
   constructor(private prisma: PrismaService, private sessions: SessionManager, private engine: BotEngine, private rt: RealtimeGateway, private subs: SubscriptionService) {}
 
@@ -49,7 +54,11 @@ export class InboundService implements OnModuleInit {
   }
 
   private async respond(contactId: string) {
-    if (this.busy.has(contactId)) return;
+    if (this.busy.has(contactId)) {
+      // Before, this message was silently dropped (AI + typing can take 10–20 s). Now it is answered right after.
+      this.again.add(contactId);
+      return;
+    }
     this.busy.add(contactId);
     try {
       const contact = await this.prisma.contact.findUniqueOrThrow({
@@ -60,7 +69,12 @@ export class InboundService implements OnModuleInit {
       history.reverse();
       const lastIn = [...history].reverse().find((h) => h.direction === 'in');
       const lastOut = [...history].reverse().find((h) => h.direction === 'out');
-      if (!lastIn || (lastOut && lastOut.createdAt > lastIn.createdAt)) return; // already answered
+      // Which customer messages still need an answer. A message that arrived while the previous reply was
+      // being typed is older than that reply, so "newer than the last outgoing message" is not enough.
+      const mark = this.handledUpTo.get(contactId);
+      const lastHuman = [...history].reverse().find((h) => h.direction === 'out' && h.sentBy === 'human');
+      const cutoff = mark !== undefined ? Math.max(mark, lastHuman?.createdAt.getTime() ?? 0) : (lastOut?.createdAt.getTime() ?? 0);
+      if (!lastIn || lastIn.createdAt.getTime() <= cutoff) return; // already answered
       const { account } = contact;
       const vars = { name: contact.name, number: contact.waId };
 
@@ -68,9 +82,10 @@ export class InboundService implements OnModuleInit {
       const cmd = optCommand(lastIn.body);
       if (cmd) {
         await this.prisma.contact.update({ where: { id: contactId }, data: { optedOut: cmd === 'stop' } });
-        await this.send(account.id, contact.id, contact.waId, cmd === 'stop'
-          ? 'You have been unsubscribed and will not get automatic replies. Send START to subscribe again.'
-          : 'Welcome back! You are subscribed again.', 'system');
+        const earlier = history.filter((h) => h.direction === 'in' && h.id !== lastIn.id).map((h) => h.body);
+        const lang = replyLanguage(account.workingBot?.language ?? 'auto', lastIn.body, earlier);
+        await this.send(account.id, contact.id, contact.waId, say(cmd, lang), 'system');
+        this.handledUpTo.set(contactId, lastIn.createdAt.getTime());
         return;
       }
       if (contact.optedOut || !account.botEnabled || contact.botPaused) return;
@@ -88,12 +103,14 @@ export class InboundService implements OnModuleInit {
         return;
       }
 
-      const isFirstConversation = !history.some((h) => h.direction === 'out');
-      const welcome = isFirstConversation && bot.welcomeMessage.trim() ? render(bot.welcomeMessage, vars) : null;
-
       // Answer everything the customer sent since our last reply.
-      const unanswered = history.filter((h) => h.direction === 'in' && (!lastOut || h.createdAt > lastOut.createdAt)).map((h) => h.body);
+      const unanswered = history.filter((h) => h.direction === 'in' && h.createdAt.getTime() > cutoff).map((h) => h.body);
       const decision = await this.engine.decide(bot, lastIn.body, unanswered.join('\n'), history.map((h) => ({ direction: h.direction as 'in' | 'out', body: h.body })), contact);
+
+      // Welcome in the customer's language (Hindi version for Hindi / Hinglish customers, if the owner wrote one).
+      const isFirstConversation = !history.some((h) => h.direction === 'out');
+      const welcomeText = pickText(bot.welcomeMessage, bot.welcomeMessageHi, decision.lang ?? 'en');
+      const welcome = isFirstConversation && welcomeText ? render(welcomeText, vars) : null;
 
       if (welcome && decision.flowName === 'Greeting') decision.messages = []; // the welcome below already greets
 
@@ -151,10 +168,15 @@ export class InboundService implements OnModuleInit {
       } catch (e) {
         if (!sentAny) await this.subs.refund(wsId); // nothing reached the customer: give the chat back
         throw e;
+      } finally {
+        if (sentAny) this.handledUpTo.set(contactId, lastIn.createdAt.getTime());
       }
       if (decision.handoff) await this.flagHuman(contact.id, account.id);
     } finally {
       this.busy.delete(contactId);
+      if (this.again.delete(contactId)) {
+        this.respond(contactId).catch((e) => this.log.error(`Reply failed: ${e.message}`));
+      }
     }
   }
 

@@ -6,8 +6,10 @@ import { AppModule } from './app.module';
 import { UPLOAD_DIR } from './media';
 import { ensureLocalMedia } from './media-store';
 import { PrismaService } from './prisma.service';
+import { appSecret } from './auth/crypto';
 
 async function bootstrap() {
+  appSecret(); // stops here with a clear message if SESSION_SECRET is missing on a real server
   // rawBody: needed to verify Razorpay webhook signatures
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { rawBody: true });
 

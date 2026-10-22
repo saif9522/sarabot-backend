@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma.service';
 import { BotEngine } from '../bot/bot.engine';
 import { LlmService } from '../llm.service';
 import { AuthUser, CurrentUser, Roles, ws } from '../auth/auth.guard';
+import { LANG_SETTINGS } from '../bot/language';
 
 class BotDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(80) name?: string;
@@ -23,6 +24,9 @@ class BotDto {
   @IsOptional() @IsString() @MaxLength(50000) knowledge?: string;
   @IsOptional() @IsString() @MaxLength(1000) welcomeMessage?: string;
   @IsOptional() @IsString() @MaxLength(1000) fallbackMessage?: string;
+  @IsOptional() @IsIn(LANG_SETTINGS) language?: string;
+  @IsOptional() @IsString() @MaxLength(1000) welcomeMessageHi?: string;
+  @IsOptional() @IsString() @MaxLength(1000) fallbackMessageHi?: string;
   @IsOptional() @IsBoolean() useProducts?: boolean;
 }
 
@@ -42,13 +46,15 @@ class FlowDto {
   @IsOptional() @IsInt() priority?: number;
   @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => StepDto) steps!: StepDto[];
 }
+class ToggleDto { @IsBoolean() enabled!: boolean }
 class HistoryDto {
   @IsIn(['in', 'out']) direction!: 'in' | 'out';
-  @IsString() body!: string;
+  @IsString() @MaxLength(4096) body!: string;
 }
 class TestDto {
   @IsString() @MinLength(1) @MaxLength(2000) message!: string;
-  @IsOptional() @IsArray() @ValidateNested({ each: true }) @Type(() => HistoryDto) history?: HistoryDto[];
+  // Capped: every test call goes to the paid AI.
+  @IsOptional() @IsArray() @ArrayMaxSize(40) @ValidateNested({ each: true }) @Type(() => HistoryDto) history?: HistoryDto[];
 }
 
 const withFlows = { flows: { orderBy: [{ isNoMatch: 'asc' as const }, { priority: 'desc' as const }, { createdAt: 'asc' as const }], include: { steps: { orderBy: { position: 'asc' as const } } } } };
@@ -137,7 +143,7 @@ export class BotsController {
   }
 
   @Patch(':id/flows/:flowId')
-  async toggleFlow(@CurrentUser() u: AuthUser, @Param('id') botId: string, @Param('flowId') flowId: string, @Body() body: { enabled?: boolean }) {
+  async toggleFlow(@CurrentUser() u: AuthUser, @Param('id') botId: string, @Param('flowId') flowId: string, @Body() body: ToggleDto) {
     await this.ownFlow(u, botId, flowId);
     return this.prisma.flow.update({ where: { id: flowId }, data: { enabled: !!body.enabled } });
   }

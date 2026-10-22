@@ -18,14 +18,22 @@ export async function verifyPassword(pw: string, stored: string): Promise<boolea
   return got.length === expected.length && timingSafeEqual(got, expected);
 }
 
-const secret = () => {
+/**
+ * The app secret: signs logins and encrypts saved settings and WhatsApp logins.
+ * Without a real SESSION_SECRET a well-known development key would be used — anyone who knows it could
+ * sign in as any user, including the Super Admin. So on a real server (NODE_ENV=production or on Render)
+ * the app refuses to run without one. Locally the development key still works.
+ */
+export const DEV_SECRET = 'dev-only-secret-change-me-dev-only-secret';
+export function appSecret(): string {
   const s = process.env.SESSION_SECRET;
-  if (!s || s.length < 32) {
-    if (process.env.NODE_ENV === 'production') throw new Error('SESSION_SECRET must be at least 32 characters');
-    return 'dev-only-secret-change-me-dev-only-secret';
+  if (s && s.length >= 32) return s;
+  if (process.env.NODE_ENV === 'production' || process.env.RENDER) {
+    throw new Error('SESSION_SECRET must be set to a random string of at least 32 characters (e.g. `openssl rand -hex 32`).');
   }
-  return s;
-};
+  return DEV_SECRET;
+}
+const secret = appSecret;
 
 export interface TokenPayload { uid: string; sv: number; iat: number; exp: number }
 const b64 = (s: string) => Buffer.from(s).toString('base64url');
