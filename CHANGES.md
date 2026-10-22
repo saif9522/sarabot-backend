@@ -95,3 +95,9 @@ Shown as "Training data" in chats and in the Test tab.
 - "Answer everything" mode never goes silent: if the AI returns an empty reply it is asked again once,
   then the fallback text is sent.
 - Requests to write something (letter, message) are written right away.
+
+## 10. Safety net: no customer message left unanswered (22 Oct, update 7)
+
+- Every 30 s the server looks for customer messages from the last 15 minutes that are still waiting
+  (server restarted during the short wait, a reply failed …) and answers them. Each message is retried once.
+  Log line: `Safety net: answering a waiting message …`.

@@ -1,4 +1,4 @@
-import { Global, Injectable, Logger, Module, OnModuleInit } from '@nestjs/common';
+import { Global, Injectable, Logger, Module, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { PrismaService } from '../prisma.service';
 import { RealtimeGateway } from '../realtime.gateway';
 import { BotEngine, OutMessage } from '../bot/bot.engine';
@@ -17,7 +17,7 @@ const FALLBACK_COOLDOWN_MS = Math.max(0, Number(process.env.FALLBACK_COOLDOWN_MI
  * current hours → reply. A human can take over any chat by pausing the bot for that contact.
  */
 @Injectable()
-export class InboundService implements OnModuleInit {
+export class InboundService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger('Inbound');
   private timers = new Map<string, NodeJS.Timeout>();
   private busy = new Set<string>();
@@ -31,8 +31,38 @@ export class InboundService implements OnModuleInit {
   constructor(private prisma: PrismaService, private sessions: SessionManager, private engine: BotEngine, private rt: RealtimeGateway, private subs: SubscriptionService) {}
 
 
+  /** contactId -> id of the newest customer message the bot has already looked at (replied or decided to stay silent) */
+  private attempted = new Map<string, string>();
+  private sweeper?: NodeJS.Timeout;
+
   onModuleInit() {
     this.sessions.onMessage((m) => this.receive(m));
+    // Safety net: every 30 s, answer any customer message that is still waiting (e.g. the server restarted
+    // during the short wait before replying, or a reply failed). Each message is only retried once.
+    this.sweeper = setInterval(() => this.sweep().catch((e) => this.log.warn(`Sweep failed: ${e.message}`)), 30_000);
+  }
+
+  onModuleDestroy() {
+    clearInterval(this.sweeper);
+  }
+
+  private async sweep() {
+    const now = Date.now();
+    const recent = await this.prisma.contact.findMany({
+      where: {
+        lastMessageAt: { gte: new Date(now - 15 * 60_000), lte: new Date(now - 20_000) },
+        botPaused: false, optedOut: false, account: { botEnabled: true },
+      },
+      select: { id: true, messages: { orderBy: { createdAt: 'desc' }, take: 1, select: { id: true, direction: true } } },
+      take: 200,
+    });
+    for (const c of recent) {
+      const last = c.messages[0];
+      if (!last || last.direction !== 'in' || this.attempted.get(c.id) === last.id) continue;
+      if (this.busy.has(c.id) || this.timers.has(c.id)) continue;
+      this.log.log(`Safety net: answering a waiting message from contact ${c.id}`);
+      await this.respond(c.id).catch((e) => this.log.error(`Reply failed: ${e.message}`));
+    }
   }
 
   async receive(m: Inbound) {
@@ -69,6 +99,7 @@ export class InboundService implements OnModuleInit {
       const history = await this.prisma.message.findMany({ where: { contactId }, orderBy: { createdAt: 'desc' }, take: 30 });
       history.reverse();
       const lastIn = [...history].reverse().find((h) => h.direction === 'in');
+      if (lastIn) this.attempted.set(contactId, lastIn.id); // the safety net won't try this message again
       const lastOut = [...history].reverse().find((h) => h.direction === 'out');
       // Which customer messages still need an answer. A message that arrived while the previous reply was
       // being typed is older than that reply, so "newer than the last outgoing message" is not enough.
