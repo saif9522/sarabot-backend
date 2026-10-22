@@ -51,3 +51,14 @@ Shown as "Training data" in chats and in the Test tab.
 - Bot test endpoint: history size capped (each test costs AI money); flow toggle body validated.
 - Bot settings page now shows an error when saving fails.
 - Frontend: removed unused duplicate files in the root (`api.ts`, `ui.tsx`, `page.tsx`, `tsconfig.tsbuildinfo`).
+
+## 5. ChatGPT-style replies + always online (22 Oct, update 2)
+
+- **Bot → Settings → "Answer every message (like ChatGPT)"** — ON by default. The AI now replies to everything
+  (greetings, "thanks", general questions, "Hindi me baat karo" …). Business facts still come only from your data.
+  Before, the AI was told to stay silent on anything not about the business — that is why some messages got no reply.
+  Turn it OFF for the old "business questions only" behaviour.
+- If the customer asks for a language ("Hindi me baat karo"), the AI keeps using it.
+- **Numbers → Manage → "Always show online"** — OFF by default, per number. Keeps the number "online" instead of
+  "last seen". Side effect: the phone may show fewer WhatsApp notifications while it is on.
+- New columns `Bot.alwaysReply` and `Account.alwaysOnline` are added automatically on startup.

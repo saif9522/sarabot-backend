@@ -55,6 +55,38 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
   private retries = new Map<string, number>();
   /** accountIds whose connection is being opened right now (prevents two sockets at once) */
   private opening = new Set<string>();
+  /** accountId -> "always online" setting, and the timer that keeps re-sending "online" */
+  private alwaysOnline = new Map<string, boolean>();
+  private presenceTimers = new Map<string, NodeJS.Timeout>();
+
+  /**
+   * "Always online": WhatsApp shows a linked device as online only while it keeps saying so, so we repeat
+   * "available" every 45 s. Note: while WhatsApp thinks you are online on a linked device, the phone
+   * shows fewer notifications — that's why this is a per-number choice, off by default.
+   * (People only see it if the phone's privacy setting lets them see "online".)
+   */
+  setAlwaysOnline(accountId: string, on: boolean) {
+    this.alwaysOnline.set(accountId, on);
+    this.applyPresence(accountId);
+  }
+
+  private applyPresence(accountId: string) {
+    clearInterval(this.presenceTimers.get(accountId));
+    this.presenceTimers.delete(accountId);
+    const s = this.sessions.get(accountId);
+    if (!s?.sock || s.state.status !== 'connected') return;
+    const sock = s.sock;
+    if (this.alwaysOnline.get(accountId)) {
+      const ping = () => sock.sendPresenceUpdate('available').catch(() => undefined);
+      ping();
+      this.presenceTimers.set(accountId, setInterval(() => {
+        if (this.sessions.get(accountId)?.sock !== sock) return clearInterval(this.presenceTimers.get(accountId));
+        ping();
+      }, 45_000));
+    } else {
+      sock.sendPresenceUpdate('unavailable').catch(() => undefined);
+    }
+  }
 
   constructor(private prisma: PrismaService, private rt: RealtimeGateway) {}
 
@@ -121,6 +153,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
 
   async onModuleDestroy() {
     if (this.watchdog) clearInterval(this.watchdog);
+    for (const t of this.presenceTimers.values()) clearInterval(t);
     if (this.keepAlive) clearInterval(this.keepAlive);
     for (const s of this.sessions.values()) {
       s.stopping = true;
@@ -146,9 +179,10 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
       try { existing.sock.end(undefined); } catch { /* already closed */ }
       existing.sock = undefined;
     }
-    const acc = await this.prisma.account.findUnique({ where: { id: accountId }, select: { workspaceId: true } });
+    const acc = await this.prisma.account.findUnique({ where: { id: accountId }, select: { workspaceId: true, alwaysOnline: true } });
     if (!acc) throw new Error('Number not found');
     this.owners.set(accountId, acc.workspaceId);
+    this.alwaysOnline.set(accountId, acc.alwaysOnline);
     this.sessions.set(accountId, { sock: undefined, stopping: false, state: { status: 'starting', qr: null, lastError: null } });
     this.update(accountId, {});
     const mine = this.sessions.get(accountId)!;
@@ -187,7 +221,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
       ...(version ? { version } : {}),
       browser: Browsers.windows('SAS Chatbot'),
       logger: pino({ level: 'silent' }) as any,
-      markOnlineOnConnect: false,
+      markOnlineOnConnect: !!this.alwaysOnline.get(accountId),
       syncFullHistory: false,
     });
     const session = this.sessions.get(accountId)!;
@@ -208,6 +242,7 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
         this.retries.delete(accountId);
         const phone = sock.user?.id ? toWaId(sock.user.id) : null;
         this.update(accountId, { status: 'connected', qr: null, lastError: null }, session);
+        this.applyPresence(accountId);
         if (phone) await this.prisma.account.update({ where: { id: accountId }, data: { phone } }).catch(() => undefined);
         this.rt.toWorkspace(this.owners.get(accountId), 'account', { id: accountId, ...session.state, phone });
         this.log.log(`Connected +${phone}`);
@@ -221,6 +256,8 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
         const reason = (u.lastDisconnect?.error as any)?.message as string | undefined;
         const waitingForScan = session.state.status === 'qr';
         session.sock = undefined;
+        clearInterval(this.presenceTimers.get(accountId));
+        this.presenceTimers.delete(accountId);
         this.log.warn(`Connection closed for ${accountId}: code ${code ?? '-'} ${reason ?? ''}`);
         const linked = !!state.creds?.registered;
         const tries = (this.retries.get(accountId) ?? 0) + 1;

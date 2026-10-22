@@ -114,6 +114,8 @@ model Account {
   workStart     String    @default("09:00")
   workEnd       String    @default("18:00")
   timezone      String    @default("Asia/Kolkata")
+  /// Show this number as "online" all the time (note: the phone then gets fewer WhatsApp notifications)
+  alwaysOnline  Boolean   @default(false)
   createdAt     DateTime  @default(now())
   contacts      Contact[]
   waAuth        WaAuth[]
@@ -160,6 +162,8 @@ model Bot {
   /// Hindi versions, sent to customers who write in Hindi / Hinglish (empty = use the English one)
   welcomeMessageHi  String  @default("")
   fallbackMessageHi String  @default("")
+  /// true = answer every message like ChatGPT (general questions too); false = business questions only, stay silent on chit-chat
+  alwaysReply       Boolean @default(true)
   useProducts     Boolean   @default(true)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
