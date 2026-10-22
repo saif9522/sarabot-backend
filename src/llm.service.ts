@@ -84,7 +84,8 @@ export class LlmService {
             signal: AbortSignal.timeout(15_000),
             body: JSON.stringify({
               model,
-              messages: [{ role: 'system', content: system }, { role: 'user', content: prompt }],
+              // JSON mode requires the word "json" in the messages, or OpenAI rejects the request (400).
+              messages: [{ role: 'system', content: `${system}\n\nRespond with a single JSON object only.` }, { role: 'user', content: prompt }],
               // Reasoning models also spend tokens "thinking": leave room for that.
               max_completion_tokens: maxTokens + 1500,
               ...(level < 2 ? { response_format: { type: 'json_object' } } : {}),
