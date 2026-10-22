@@ -313,7 +313,12 @@ export class SessionManager implements OnApplicationBootstrap, OnModuleDestroy {
             c.conversation || c.extendedTextMessage?.text || c.imageMessage?.caption || c.videoMessage?.caption ||
             c.buttonsResponseMessage?.selectedDisplayText || c.listResponseMessage?.title ||
             `[${Object.keys(c)[0]?.replace('Message', '') || 'media'} message]`;
-          await this.handler?.({ accountId, workspaceId: this.owners.get(accountId) ?? null, from: toWaId(jid), name: m.pushName || undefined, text, id: m.key.id! });
+          // WhatsApp now often addresses people by a private "LID" (…@lid) instead of their phone number.
+          // Baileys 7 also gives the phone-number address (remoteJidAlt): prefer it, so a customer is always
+          // the same contact, shown with their real number.
+          const alt = (m.key as { remoteJidAlt?: string }).remoteJidAlt;
+          const pn = jid.endsWith('@s.whatsapp.net') ? jid : alt && alt.endsWith('@s.whatsapp.net') ? alt : null;
+          await this.handler?.({ accountId, workspaceId: this.owners.get(accountId) ?? null, from: toWaId(pn ?? jid), name: m.pushName || undefined, text, id: m.key.id! });
         } catch (e) {
           this.log.error(`Inbound message failed: ${(e as Error).message}`);
         }

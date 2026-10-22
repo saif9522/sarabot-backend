@@ -80,3 +80,11 @@ Shown as "Training data" in chats and in the Test tab.
   plan used up, hourly limit, fallback already sent, AI said nothing …).
 - `/api/health` now shows `build` (which code is running) and `ai` (which AI provider has a key).
 - OpenAI: models without "reasoning" (gpt-4o-mini, gpt-4.1-mini) skip the reasoning setting → first reply faster.
+
+## 8. WhatsApp library upgraded to Baileys 7 (22 Oct, update 5)
+
+- Baileys 6.7.24 is now marked "legacy". WhatsApp has moved many chats to private "LID" addresses (…@lid),
+  which 6.x can't always decrypt → some messages never reached the bot (grey ticks). Upgraded to 7.0.0-rc14.
+- Contacts are saved by real phone number when WhatsApp provides it (no more "+2203…@lid").
+- Node 22 is required (`engines` in package.json + `.node-version`; Render picks it up automatically).
+- After deploying: Numbers → Manage → Unlink phone, then Link and scan a new QR once.

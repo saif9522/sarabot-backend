@@ -188,6 +188,9 @@ export class BotEngine {
         languageRule +
         scopeRules +
         '- If a customer wants something one of the menu options below provides, tell them exactly what to type.\n' +
+        '- Customers often misspell words and product names or type in short Hinglish ("sarf ka price", "kitne ka h", "pric?", "rin powdr"). ' +
+        'Work out what they most likely mean (the closest product or topic) and answer that — do not ignore the message or ask them to type correctly. ' +
+        'If two products are equally likely, give both or ask which one in the same reply.\n' +
         '- Never ask for passwords, OTPs or card numbers.\n' +
         (bot.instructions ? `\nInstructions:\n${bot.instructions}\n` : '') +
         (info ? `\nBusiness information:\n${info}\n` : '') +
