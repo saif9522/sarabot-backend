@@ -2,8 +2,8 @@
 
 ## 1. Deploy steps (do these in order)
 
-1. **Database**: add 3 new columns to `Bot` — run `npx prisma db push` once,
-   or paste `prisma/manual/2026-10-22-bot-language.sql` into the Supabase SQL editor.
+1. **Database**: the 3 new `Bot` columns are now added automatically when the app starts
+   (src/prisma.service.ts). You can also add them by hand: `prisma/manual/2026-10-22-bot-language.sql`.
 2. **SESSION_SECRET**: make sure it is set on Render (32+ random characters, `openssl rand -hex 32`).
    If it is already set, keep the same value (changing it unlinks WhatsApp numbers and clears saved API keys).
    The app now refuses to start on Render / `NODE_ENV=production` without it.
